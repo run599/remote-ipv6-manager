@@ -10,10 +10,10 @@
 
 // 插件配置（plugin.json 解析后）
 struct PluginConfig {
-    std::string id;           // "lock_screen"
-    std::string name;         // "锁机"
-    std::string version;      // "1.0.0"
-    std::string command;      // 启动命令: "python plugin.py" 或 "lock_screen.exe"
+    std::string id;           // 插件 ID
+    std::string name;         // 显示名称
+    std::string version;      // 版本号
+    std::string command;      // 启动命令: "python plugin.py"
     std::string workDir;      // 工作目录
     std::string description;  // 描述
 };

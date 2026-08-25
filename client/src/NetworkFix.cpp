@@ -14,7 +14,7 @@
 #pragma comment(lib, "ws2_32.lib")
 
 // 从 URL 中提取 IPv6 地址
-// 支持格式: "http://[240e:3a3:...]:8080" → L"240e:3a3:..."
+// 支持格式: "http://[2001:db8::1]:8080" → L"2001:db8::1"
 static std::wstring ExtractIPv6FromUrl(const std::string& url) {
     // 找到 [ 和 ] 之间的内容
     auto lb = url.find('[');
@@ -88,7 +88,7 @@ static void GetLinkLocalSuffix(const unsigned char* b, wchar_t* out, size_t cap)
 }
 
 // 核心：配置 IPv6 路由（on-link 前缀 + 默认路由），无全球地址时兜底手配
-// targetIPv6: 服务端 IPv6 地址（如 L"240e:3a3:..."）
+// targetIPv6: 服务端 IPv6 地址（如 L"2001:db8::1"）
 static void SetupIPv6Routes(const wchar_t* targetIPv6) {
     LOG_I("NetFix", "=== SetupIPv6Routes start ===");
 
