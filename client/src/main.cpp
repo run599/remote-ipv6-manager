@@ -3,6 +3,8 @@
 #include <windows.h>
 #include <filesystem>
 #include <exception>
+#include <cstdlib>
+#include <cstring>
 
 // 检查是否以管理员权限运行
 static bool IsRunAsAdmin() {
@@ -18,17 +20,43 @@ static bool IsRunAsAdmin() {
 }
 
 // UAC 提权：用 ShellExecute runas 重新启动自身
+// 注意：ShellExecute 不继承环境变量，R6M_SERVER/R6M_AGENT_KEY 需转为命令行参数传递
 static void ElevateToAdmin() {
     wchar_t exePath[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     // 获取命令行参数（保留 --server 等）
-    LPWSTR cmdLine = GetCommandLineW();
-    // ShellExecute runas 会弹 UAC 对话框
+    std::wstring params = GetCommandLineW();
+    // Skip leading executable name if quoted/unquoted
+    if (!params.empty() && params[0] == L'"') {
+        auto end = params.find(L'"', 1);
+        params = (end == std::wstring::npos) ? L"" : params.substr(end + 1);
+    } else {
+        auto end = params.find(L' ');
+        params = (end == std::wstring::npos) ? L"" : params.substr(end + 1);
+    }
+    // 环境变量提升后丢失：转为参数传递（仅当命令行里没有显式指定时）
+    {
+        auto hasFlag = [&](const wchar_t* flag) {
+            return params.find(flag) != std::wstring::npos;
+        };
+        if (const char* srv = getenv("R6M_SERVER")) {
+            if (!hasFlag(L"--server")) {
+                std::wstring w(srv, srv + strlen(srv));
+                params += L" --server " + w;
+            }
+        }
+        if (const char* key = getenv("R6M_AGENT_KEY")) {
+            if (!hasFlag(L"--agent-key")) {
+                std::wstring w(key, key + strlen(key));
+                params += L" --agent-key " + w;
+            }
+        }
+    }
     LOG_INFO("Main", "Requesting admin elevation (UAC)...");
     SHELLEXECUTEINFOW sei = { sizeof(sei) };
     sei.lpVerb = L"runas";
     sei.lpFile = exePath;
-    sei.lpParameters = cmdLine;  // 传递原始参数
+    sei.lpParameters = params.c_str();  // 参数 + 环境变量转换值
     sei.nShow = SW_HIDE;
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     if (ShellExecuteExW(&sei)) {

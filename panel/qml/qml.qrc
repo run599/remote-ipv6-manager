@@ -1,0 +1,13 @@
+<RCC>
+    <qresource prefix="/">
+        <file>main.qml</file>
+        <file>Theme.qml</file>
+        <file>LoginPage.qml</file>
+        <file>MainPage.qml</file>
+        <file>AgentList.qml</file>
+        <file>ShellTab.qml</file>
+        <file>McpTab.qml</file>
+        <file>FileTab.qml</file>
+        <file>ScreenTab.qml</file>
+    </qresource>
+</RCC>

@@ -1,0 +1,10 @@
+// QML 模块声明
+module C2Panel
+singleton Theme 1.0 Theme.qml
+LoginPage 1.0 LoginPage.qml
+MainPage 1.0 MainPage.qml
+AgentList 1.0 AgentList.qml
+ShellTab 1.0 ShellTab.qml
+McpTab 1.0 McpTab.qml
+FileTab 1.0 FileTab.qml
+ScreenTab 1.0 ScreenTab.qml

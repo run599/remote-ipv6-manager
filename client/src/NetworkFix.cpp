@@ -206,7 +206,7 @@ static void SetupIPv6DNS() {
     RunCmd(ps, "dns-setup");
     Sleep(1000);
     // 验证解析
-    RunCmd(L"cmd /c nslookup sfgiouyt.duckdns.org", "dns-lookup");
+    RunCmd(L"cmd /c nslookup your-domain.duckdns.org", "dns-lookup");
     LOG_I("NetFix", "=== SetupIPv6DNS done ===");
 }
 

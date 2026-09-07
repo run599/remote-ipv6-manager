@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginInterface.h"
 #include <vector>
+#include <list>
 #include <string>
 #include <map>
 #include <functional>
@@ -43,7 +44,9 @@ public:
 
 private:
     std::vector<PluginConfig> _configs;
-    std::vector<PluginProcess> _processes;
+    // list 而非 vector：callPlugin 持有 PluginProcess* 期间其他插件 startPlugin
+    // 会触发 vector 扩容导致指针悬垂（原实现在多插件场景下随机崩溃）
+    std::list<PluginProcess> _processes;
     std::map<std::string, std::string> _toolToPlugin; // 工具名 → 插件ID
     std::wstring _pythonPathW;  // 嵌入式 Python 路径（宽字符）
 

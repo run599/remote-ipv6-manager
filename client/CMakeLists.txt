@@ -12,6 +12,7 @@ add_executable(RemoteClient WIN32
     src/StubCore.cpp
     src/PluginLoader.cpp
     src/NetworkFix.cpp
+    src/AntiHook.cpp
 )
 
 target_include_directories(RemoteClient PRIVATE src include)
