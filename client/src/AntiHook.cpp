@@ -156,6 +156,7 @@ bool AntiHook::VerifyExportBytes(const char* funcName, const char* dllName,
                                  ApiIntegrityReport& report) {
     report.function = funcName;
     report.intact = false;
+    report.state = AH_UNVERIFIABLE;   // 默认"无法验证"，只有逐字节比对通过才置 AH_INTACT
 
     HMODULE hMod = GetModuleHandleA(dllName);
     if (!hMod) {
@@ -221,9 +222,13 @@ bool AntiHook::VerifyExportBytes(const char* funcName, const char* dllName,
 
     if (memcmp(diskBytes, memBytes, kCompareBytes) == 0) {
         report.intact = true;
+        report.state = AH_INTACT;
         report.detail = "ok";
         return true;
     }
+
+    // 走到这里才是真的字节不一致 —— 唯一应触发熔断的情况
+    report.state = AH_TAMPERED;
 
     // 差异描述：前若干字节的 hex 对比
     char diskHex[33], memHex[33];
@@ -268,12 +273,33 @@ std::string AntiHook::SummaryForHeartbeat() {
     bool ok = CheckCriticalApis(reports);
     LogReports(reports);
     if (ok) return "ok";
-    std::string bad;
+
+    // 分开上报：只有"确认被篡改"才让服务端标红，避免把"没加载的模块"
+    // 报成被注入（原来一律 tampered:，会误导运维去排查不存在的注入）
+    std::string bad, unknown;
     for (const auto& r : reports) {
-        if (!r.intact) {
+        if (r.state == AH_TAMPERED) {
             if (!bad.empty()) bad += ",";
             bad += r.function;
+        } else if (r.state == AH_UNVERIFIABLE) {
+            if (!unknown.empty()) unknown += ",";
+            unknown += r.function;
         }
     }
-    return "tampered:" + bad;
+    if (!bad.empty()) return "tampered:" + bad;
+    return "unverifiable:" + unknown;
+}
+
+bool AntiHook::HasTampered(const std::vector<ApiIntegrityReport>& reports) {
+    for (const auto& r : reports) {
+        if (r.state == AH_TAMPERED) return true;
+    }
+    return false;
+}
+
+bool AntiHook::HasUnverifiable(const std::vector<ApiIntegrityReport>& reports) {
+    for (const auto& r : reports) {
+        if (r.state == AH_UNVERIFIABLE) return true;
+    }
+    return false;
 }

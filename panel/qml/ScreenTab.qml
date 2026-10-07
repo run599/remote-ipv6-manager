@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import C2Panel
 
 Rectangle {
     id: screenTab
@@ -52,16 +53,20 @@ Rectangle {
             Flickable {
                 id: flickable
                 anchors.fill: parent; anchors.margins: 12
-                contentWidth: image.width * image.scale
-                contentHeight: image.height * image.scale
+                // 尺寸由 image 的 width/height 真实承载，这里直接跟随，
+                // 不再 width*scale（重复计入 + 以中心缩放 → 放大后拖不到右下角）
+                contentWidth: image.width
+                contentHeight: image.height
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
 
                 Image {
                     id: image
                     property real imageScale: 1.0
-                    scale: imageScale
-                    fillMode: Image.PreserveAspectFit
+                    transformOrigin: Item.TopLeft
+                    width: sourceSize.width * imageScale
+                    height: sourceSize.height * imageScale
+                    fillMode: Image.Stretch
                     smooth: true; asynchronous: true
 
                     BusyIndicator {
@@ -89,11 +94,11 @@ Rectangle {
 
     Connections {
         target: mcp
-        function onScreenshotReady(base64) {
+        function onScreenshotReady(tool, base64, source) {
             screenTab.screenshotBase64 = base64
             image.source = "data:image/bmp;base64," + base64
         }
-        function onToolResult(result) {
+        function onToolResult(tool, result, source) {
             // 如果是 screen_info
             try {
                 var obj = JSON.parse(result)

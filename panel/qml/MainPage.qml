@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import C2Panel
 
 Item {
     id: mainPage
@@ -10,7 +11,8 @@ Item {
 
     // 自动刷新
     Timer {
-        interval: 5000; running: true; repeat: true
+        // 未登录时 serverUrl 为空，每 5 秒发一次必然失败的请求并清空列表
+        interval: 5000; running: mainPage.serverUrl !== ""; repeat: true
         onTriggered: agentModel.refresh()
     }
 

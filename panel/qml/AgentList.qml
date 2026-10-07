@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import C2Panel
 
 Rectangle {
     id: agentList
@@ -31,7 +32,7 @@ Rectangle {
 
             delegate: Rectangle {
                 width: listView.width; height: 52; radius: 8
-                property bool isSelected: agentModel.selectedHwid() === model.hwid
+                property bool isSelected: model.selected === true
                 property bool isHovered: agentMouse.containsMouse
                 color: isSelected ? Qt.rgba(10/255, 132/255, 255/255, 0.12) :
                        isHovered ? Qt.rgba(0,0,0,0.04) : "transparent"
@@ -55,7 +56,7 @@ Rectangle {
                 MouseArea {
                     id: agentMouse; anchors.fill: parent; hoverEnabled: true
                     onClicked: {
-                        agentModel.setProperty(model.index, "selected", true)
+                        agentModel.selectAgent(model.hwid)
                         agentList.agentSelected(model.hwid)
                     }
                 }

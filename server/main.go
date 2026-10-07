@@ -40,15 +40,17 @@ type Agent struct {
 
 // AgentRegistry manages all connected agents
 type AgentRegistry struct {
-	mu     sync.Mutex
-	agents map[string]*Agent
-	keys   map[string]string // hwid -> per-agent key（不出现在 /api/agents 输出）
+	mu             sync.Mutex
+	agents         map[string]*Agent
+	keys           map[string]string // hwid -> per-agent key（不出现在 /api/agents 输出）
+	clearIntegrity map[string]bool   // hwid -> 待下发的"解除熔断"指令（人工确认通道）
 }
 
 func NewAgentRegistry() *AgentRegistry {
 	return &AgentRegistry{
-		agents: make(map[string]*Agent),
-		keys:   make(map[string]string),
+		agents:         make(map[string]*Agent),
+		keys:           make(map[string]string),
+		clearIntegrity: make(map[string]bool),
 	}
 }
 
@@ -65,6 +67,36 @@ func (r *AgentRegistry) IssueKey(hwid string) string {
 	k := hex.EncodeToString(b)
 	r.keys[hwid] = k
 	return k
+}
+
+// RequestIntegrityClear 运维确认排查完毕后请求解除该 agent 的熔断
+func (r *AgentRegistry) RequestIntegrityClear(hwid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.agents[hwid]; !ok {
+		return false
+	}
+	r.clearIntegrity[hwid] = true
+	return true
+}
+
+// ConsumeIntegrityClear 取走一次解除指令（只下发一次）
+func (r *AgentRegistry) ConsumeIntegrityClear(hwid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.clearIntegrity[hwid] {
+		delete(r.clearIntegrity, hwid)
+		return true
+	}
+	return false
+}
+
+// HasKey 该 hwid 是否已完成首次登记（per-agent 密钥已存在）
+func (r *AgentRegistry) HasKey(hwid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.keys[hwid]
+	return ok
 }
 
 // AgentKey 返回该 agent 的独立密钥；不存在返回空串
@@ -226,7 +258,8 @@ func (l *LoginLimiter) Allowed(ip string) bool {
 	}
 	if time.Now().UnixMilli() > until {
 		delete(l.blocked, ip)
-		delete(l.fails, ip)
+		// 注意：不清零 l.fails —— 失败计数必须跨锁定期累积，
+		// 否则攻击者可以每 5 次失败/分钟无限尝试
 		return true
 	}
 	return false
@@ -237,9 +270,14 @@ func (l *LoginLimiter) RecordFailure(ip string) {
 	defer l.mu.Unlock()
 	l.fails[ip]++
 	if l.fails[ip] >= 5 {
-		l.blocked[ip] = time.Now().Add(time.Minute).UnixMilli()
-		l.fails[ip] = 0
-		log.Printf("[Session] IP %s 登录失败次数过多，锁定 1 分钟", ip)
+		// 指数退避：第 5 次锁 1 分钟，此后每次失败翻倍，上限约 64 分钟
+		extra := l.fails[ip] - 5
+		if extra > 6 {
+			extra = 6
+		}
+		lockFor := time.Minute << uint(extra)
+		l.blocked[ip] = time.Now().Add(lockFor).UnixMilli()
+		log.Printf("[Session] IP %s 登录失败 %d 次，锁定 %s", ip, l.fails[ip], lockFor)
 	}
 }
 
@@ -247,13 +285,28 @@ func (l *LoginLimiter) RecordSuccess(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.fails, ip)
+	delete(l.blocked, ip)
+}
+
+// Cleanup 清理已解封且失败计数已归零的条目，防止 map 无界增长
+func (l *LoginLimiter) Cleanup() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now().UnixMilli()
+	for ip, until := range l.blocked {
+		if now > until && l.fails[ip] == 0 {
+			delete(l.blocked, ip)
+			delete(l.fails, ip)
+		}
+	}
 }
 
 // CommandQueue for agent commands
 type CommandQueue struct {
 	mu      sync.Mutex
-	cmds    map[string][]Command // hwid -> [Command]
+	cmds    map[string][]Command   // hwid -> [Command]
 	results map[string]resultEntry // requestId -> result (async, 带 TTL 防内存积压)
+	owner   map[string]ownerEntry  // requestId -> 归属 hwid（阻止 agent 伪造他机结果）
 }
 
 type resultEntry struct {
@@ -261,46 +314,97 @@ type resultEntry struct {
 	deadline int64 // unix ms
 }
 
-const resultTTL = 30 * time.Minute
+// ownerEntry 记录某个 requestId 归属于哪个 agent，以及归属信息的清理时限
+type ownerEntry struct {
+	hwid     string
+	deadline int64 // unix ms
+}
+
+const (
+	resultTTL        = 30 * time.Minute
+	commandTTL       = 10 * time.Minute
+	maxQueuePerAgent = 64
+	maxQueueTotal    = 8192
+)
 
 type Command struct {
 	RequestID string
+	HWID      string
 	Method    string
 	Params    string
+	Enqueued  int64 // unix ms，超时未取走即丢弃（避免上线后执行陈旧指令）
 }
 
 func NewCommandQueue() *CommandQueue {
 	return &CommandQueue{
 		cmds:    make(map[string][]Command),
 		results: make(map[string]resultEntry),
+		owner:   make(map[string]ownerEntry),
 	}
 }
 
-func (q *CommandQueue) Enqueue(hwid, method, params string) string {
+func (q *CommandQueue) Enqueue(hwid, method, params string) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	reqID := fmt.Sprintf("req-%d", time.Now().UnixNano())
-	q.cmds[hwid] = append(q.cmds[hwid], Command{RequestID: reqID, Method: method, Params: params})
-	return reqID
+	if len(q.cmds[hwid]) >= maxQueuePerAgent {
+		return "", fmt.Errorf("per-agent queue full (max %d)", maxQueuePerAgent)
+	}
+	total := 0
+	for _, v := range q.cmds {
+		total += len(v)
+	}
+	if total >= maxQueueTotal {
+		return "", fmt.Errorf("global queue full (max %d)", maxQueueTotal)
+	}
+	reqID := "req-" + randomHex(16) // 不可预测，避免被猜出他人 request_id
+	now := time.Now()
+	q.cmds[hwid] = append(q.cmds[hwid], Command{
+		RequestID: reqID, HWID: hwid, Method: method, Params: params, Enqueued: now.UnixMilli(),
+	})
+	q.owner[reqID] = ownerEntry{hwid: hwid, deadline: now.Add(resultTTL + commandTTL).UnixMilli()}
+	return reqID, nil
 }
 
-func (q *CommandQueue) Dequeue(hwid string) (string, string, string, bool) {
+func (q *CommandQueue) Dequeue(hwid string) (Command, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	cmds, ok := q.cmds[hwid]
 	if !ok || len(cmds) == 0 {
-		return "", "", "", false
+		delete(q.cmds, hwid) // 不留空切片，避免 map 无界增长
+		return Command{}, false
+	}
+	now := time.Now().UnixMilli()
+	// 丢弃已过期指令：agent 离线很久后重新上线时不应执行陈旧命令
+	for len(cmds) > 0 && now-cmds[0].Enqueued > commandTTL.Milliseconds() {
+		cmd := cmds[0]
+		delete(q.owner, cmd.RequestID)
+		log.Printf("[Server] 丢弃过期指令 reqID=%s hwid=%s（入队 %d ms 前）", cmd.RequestID, hwid, now-cmd.Enqueued)
+		cmds = cmds[1:]
+	}
+	if len(cmds) == 0 {
+		delete(q.cmds, hwid)
+		return Command{}, false
 	}
 	cmd := cmds[0]
-	q.cmds[hwid] = cmds[1:]
-	return cmd.RequestID, cmd.Method, cmd.Params, true
+	if len(cmds) == 1 {
+		delete(q.cmds, hwid)
+	} else {
+		q.cmds[hwid] = cmds[1:]
+	}
+	return cmd, true
 }
 
-// StoreResult stores a result keyed by request_id
-func (q *CommandQueue) StoreResult(reqID, result string) {
+// StoreResult 落库结果；hwid 必须与该 requestId 的归属一致，
+// 否则拒绝（防止某个已失陷 agent 用猜到的 request_id 污染他机结果）
+func (q *CommandQueue) StoreResult(reqID, hwid, result string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if o, ok := q.owner[reqID]; ok && o.hwid != hwid {
+		return fmt.Errorf("request_id %s 不属于该 agent", reqID)
+	}
 	q.results[reqID] = resultEntry{value: result, deadline: time.Now().Add(resultTTL).UnixMilli()}
+	delete(q.owner, reqID)
+	return nil
 }
 
 // GetResult retrieves and deletes a stored result
@@ -327,6 +431,26 @@ func (q *CommandQueue) Cleanup() {
 			delete(q.results, id)
 		}
 	}
+	for id, o := range q.owner {
+		if now > o.deadline {
+			delete(q.owner, id)
+		}
+	}
+	for hwid, cmds := range q.cmds {
+		if len(cmds) == 0 {
+			delete(q.cmds, hwid)
+		}
+	}
+}
+
+// randomHex 生成 n 字节的随机 hex 串
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// 熵源不可用是致命情况，绝不退回可预测值
+		log.Fatalf("[Server] 随机数生成失败: %v", err)
+	}
+	return hex.EncodeToString(b)
 }
 
 func main() {
@@ -360,12 +484,16 @@ func main() {
 }
 
 func getEnv(key, def string) string {
-	if v := os.Getenv(key); v != "" { return v }
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
 	return def
 }
 func getEnvInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
-		if i, err := strconv.Atoi(v); err == nil { return i }
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
 	}
 	return def
 }
@@ -391,11 +519,20 @@ func runServer(port int, user, pass string, extraArgs []string) {
 	for i := 0; i < len(extraArgs); i++ {
 		switch extraArgs[i] {
 		case "--port":
-			if i+1 < len(extraArgs) { port, _ = strconv.Atoi(extraArgs[i+1]); i++ }
+			if i+1 < len(extraArgs) {
+				port, _ = strconv.Atoi(extraArgs[i+1])
+				i++
+			}
 		case "--user":
-			if i+1 < len(extraArgs) { user = extraArgs[i+1]; i++ }
+			if i+1 < len(extraArgs) {
+				user = extraArgs[i+1]
+				i++
+			}
 		case "--pass":
-			if i+1 < len(extraArgs) { pass = extraArgs[i+1]; i++ }
+			if i+1 < len(extraArgs) {
+				pass = extraArgs[i+1]
+				i++
+			}
 		}
 	}
 
@@ -420,6 +557,7 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			agents.Cleanup()
 			sessions.Cleanup()
 			cmds.Cleanup()
+			limiter.Cleanup()
 		}
 	}()
 
@@ -427,7 +565,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 
 	// Login
 	mux.HandleFunc("/api/login", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" { writeJSON(w, 405, map[string]string{"error": "POST required"}); return }
+		if r.Method != "POST" {
+			writeJSON(w, 405, map[string]string{"error": "POST required"})
+			return
+		}
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr) // 去掉端口，按 IP 限速
 		if clientIP == "" {
 			clientIP = r.RemoteAddr
@@ -451,24 +592,75 @@ func runServer(port int, user, pass string, extraArgs []string) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 
+	// Health —— 不需要任何凭据的最小探针。
+	// 客户端在发送任何密钥之前先打这个接口完成 TLS 指纹校验，
+	// 这样指纹不匹配时凭据根本不会离开本机。
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]interface{}{"ok": true, "service": "r6m-server", "version": "1.0.0"})
+	})
+
+	// Integrity clear —— 运维确认排查完毕后解除该 agent 的熔断
+	mux.HandleFunc("/api/integrity/clear", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		hwid := r.URL.Query().Get("hwid")
+		if hwid == "" {
+			writeJSON(w, 400, map[string]string{"error": "missing hwid"})
+			return
+		}
+		if !agents.RequestIntegrityClear(hwid) {
+			writeJSON(w, 404, map[string]string{"error": "unknown agent hwid"})
+			return
+		}
+		log.Printf("[Server] 运维请求解除熔断: %s（将在其下次心跳的下一次 poll 下发）", hwid)
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+
+	// Agent rekey —— 运维吊销某 hwid 的 per-agent 密钥，允许其用引导密钥重新登记。
+	// 这是 409 "already enrolled" 的官方出路：客户端换机/重装后才需要。
+	mux.HandleFunc("/api/agent/rekey", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		hwid := r.URL.Query().Get("hwid")
+		if hwid == "" {
+			writeJSON(w, 400, map[string]string{"error": "missing hwid"})
+			return
+		}
+		if !agents.HasKey(hwid) {
+			writeJSON(w, 404, map[string]string{"error": "unknown agent hwid"})
+			return
+		}
+		agents.RevokeKey(hwid)
+		log.Printf("[Server] 运维吊销 %s 的 per-agent 密钥，允许其用引导密钥重新登记", hwid)
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+
 	// Status
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		writeJSON(w, 200, map[string]int{"agents_online": agents.OnlineCount(), "agents_total": len(agents.GetAll())})
 	})
 
 	// Agents
 	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		writeJSON(w, 200, agents.GetAll())
 	})
 
 	// Agent register — 引导密钥认证；成功后下发本机独立密钥
 	mux.HandleFunc("/api/agent/register", func(w http.ResponseWriter, r *http.Request) {
-		if !checkBootstrapAuth(r, agentKey) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
 		limitJSONBody(w, r)
 		bodyBytes, _ := io.ReadAll(r.Body)
-		log.Printf("[Server] Register raw body: %s", string(bodyBytes))
 		var body map[string]interface{}
 		json.Unmarshal(bodyBytes, &body)
 		hwid, _ := body["hwid"].(string)
@@ -485,9 +677,38 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			writeJSON(w, 400, map[string]string{"error": "missing hwid"})
 			return
 		}
+		// 两条凭据通道，缺一不可：
+		//  ① 引导密钥 —— 仅用于首次登记一个全新 hwid
+		//  ② 该 hwid 自己的 per-agent 密钥 —— 用于幂等复核（客户端重启后重新注册）
+		// 绝不允许"持有引导密钥就给已登记 hwid 补发密钥"，否则任一失陷客户端
+		// 都能冒名接管其他节点（引导密钥分发在每台客户端的 r6m.ini 里）。
+		presented := r.Header.Get("X-Agent-Key")
+		bootstrapOK := checkBootstrapAuth(r, agentKey)
+		perAgentOK := false
+		if !bootstrapOK && presented != "" && agents.HasKey(hwid) {
+			perAgentOK = subtle.ConstantTimeCompare([]byte(presented), []byte(agents.AgentKey(hwid))) == 1
+		}
+		if !bootstrapOK && !perAgentOK {
+			log.Printf("[Server] 注册鉴权失败: hwid=%s ip=%s", hwid, r.RemoteAddr)
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		log.Printf("[Server] Register: hwid=%s user=%s os=%s ip=%s", hwid, user, osName, r.RemoteAddr)
+		// per-agent 密钥：每台机器独立，单机泄露不波及其他 agent。
+		// 关键约束：hwid 已登记时，只允许"持有该 hwid 既有密钥"的调用方复核，
+		// 绝不用引导密钥把别人的密钥再发一次（否则任何一个持有引导密钥的
+		// 客户端都能冒名接管其他节点）。
+		if existing := agents.AgentKey(hwid); existing != "" {
+			if !perAgentOK {
+				log.Printf("[Server] 拒绝冒名注册: hwid=%s 已登记，调用方只提供了引导密钥（ip=%s）", hwid, r.RemoteAddr)
+				writeJSON(w, 409, map[string]string{"error": "hwid already enrolled, present its per-agent key or ask operator to re-enroll"})
+				return
+			}
+			agents.Register(hwid, user, osName, r.RemoteAddr)
+			writeJSON(w, 200, map[string]string{"ok": "true", "agent_key": existing})
+			return
+		}
 		agents.Register(hwid, user, osName, r.RemoteAddr)
-		// per-agent 密钥：每台机器独立，单机泄露不波及其他 agent
 		agentKeyForThis := agents.IssueKey(hwid)
 		writeJSON(w, 200, map[string]string{"ok": "true", "agent_key": agentKeyForThis})
 	})
@@ -498,7 +719,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 		var body map[string]interface{}
 		json.NewDecoder(r.Body).Decode(&body)
 		hwid, _ := body["hwid"].(string)
-		if !checkAgentAuth(r, agentKey, hwid, agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, hwid, agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		if hwid != "" {
 			agents.Heartbeat(hwid)
 			// 完整性上报（AntiHook 三段式之二）
@@ -521,24 +745,43 @@ func runServer(port int, user, pass string, extraArgs []string) {
 		var body map[string]interface{}
 		json.Unmarshal(bodyBytes, &body)
 		hwid, _ := body["hwid"].(string)
-		if !checkAgentAuth(r, agentKey, hwid, agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, hwid, agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		log.Printf("[Server] Poll parsed HWID: '%s'", hwid)
 		agents.Heartbeat(hwid)
-		reqID, method, params, ok := cmds.Dequeue(hwid)
-		if ok {
-			log.Printf("[Server] Dequeue command for %s: reqID=%s method=%s", hwid, reqID, method)
-			writeJSON(w, 200, map[string]interface{}{"request_id": reqID, "method": method, "params": json.RawMessage(params)})
+		resp := map[string]interface{}{}
+		if agents.ConsumeIntegrityClear(hwid) {
+			// 运维已确认排查完毕：下发一次解除熔断（AntiHook 三段式的复位通道）
+			resp["clear_integrity"] = true
+			log.Printf("[Server] 已向 %s 下发解除熔断指令", hwid)
+		}
+		if cmd, ok := cmds.Dequeue(hwid); ok {
+			log.Printf("[Server] Dequeue command for %s: reqID=%s method=%s", hwid, cmd.RequestID, cmd.Method)
+			resp["request_id"] = cmd.RequestID
+			resp["method"] = cmd.Method
+			if json.Valid([]byte(cmd.Params)) {
+				resp["params"] = json.RawMessage(cmd.Params)
+			} else {
+				// 下游会把它当 JSON 解析；非法时明确降级为 {} 而不是吐出坏字节
+				log.Printf("[Server] 指令 params 非法 JSON，降级为空对象: reqID=%s", cmd.RequestID)
+				resp["params"] = json.RawMessage("{}")
+			}
 		} else {
 			log.Printf("[Server] No command for %s", hwid)
-			w.Write([]byte("{}"))
 		}
+		writeJSON(w, 200, resp)
 	})
 
 	// Agent result — per-agent 密钥（按请求头 X-Agent-HWID 认证）
 	mux.HandleFunc("/api/agent/result", func(w http.ResponseWriter, r *http.Request) {
 		// result 的 body 里只有 request_id 没有 hwid，hwid 从头里取
 		reqHWID := r.Header.Get("X-Agent-HWID")
-		if !checkAgentAuth(r, agentKey, reqHWID, agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, reqHWID, agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		limitJSONBody(w, r)
 		var body map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -550,8 +793,12 @@ func runServer(port int, user, pass string, extraArgs []string) {
 		// Result can be string or object — marshal to string for storage
 		resultBytes, _ := json.Marshal(body["result"])
 		resultStr := string(resultBytes)
-		log.Printf("[Server] Result received: reqID=%s len=%d", reqID, len(resultStr))
-		cmds.StoreResult(reqID, resultStr)
+		log.Printf("[Server] Result received: reqID=%s hwid=%s len=%d", reqID, reqHWID, len(resultStr))
+		if err := cmds.StoreResult(reqID, reqHWID, resultStr); err != nil {
+			log.Printf("[Server] 拒绝结果落库: %v", err)
+			writeJSON(w, 403, map[string]string{"error": "request_id not owned by this agent"})
+			return
+		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 
@@ -563,14 +810,15 @@ func runServer(port int, user, pass string, extraArgs []string) {
 				writeJSON(w, 500, map[string]interface{}{"ok": false, "error": "internal error"})
 			}
 		}()
-		if !checkAuth(r, sessions) { 
+		if !checkAuth(r, sessions) {
 			log.Printf("[Server] MCP auth failed")
-			writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return 
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
 		}
 		var body struct {
-			AgentHWID  string          `json:"agent_hwid"`
-			Name       string          `json:"name"`
-			Arguments  json.RawMessage `json:"arguments"`
+			AgentHWID string          `json:"agent_hwid"`
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			log.Printf("[Server] MCP decode error: %v", err)
@@ -582,15 +830,28 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			writeJSON(w, 400, map[string]string{"error": "missing hwid or name"})
 			return
 		}
+		if !agents.HasKey(body.AgentHWID) {
+			// 未登记过的 hwid 不允许入队，否则队列会被无界撑大
+			writeJSON(w, 404, map[string]string{"error": "unknown agent hwid"})
+			return
+		}
 		rpcParams, _ := json.Marshal(map[string]interface{}{"name": body.Name, "arguments": body.Arguments})
-		reqID := cmds.Enqueue(body.AgentHWID, "tools/call", string(rpcParams))
+		reqID, err := cmds.Enqueue(body.AgentHWID, "tools/call", string(rpcParams))
+		if err != nil {
+			log.Printf("[Server] 入队失败: %v", err)
+			writeJSON(w, 429, map[string]string{"error": err.Error()})
+			return
+		}
 		log.Printf("[Server] MCP enqueue for %s: reqID=%s name=%s", body.AgentHWID, reqID, body.Name)
 		writeJSON(w, 200, map[string]interface{}{"ok": true, "request_id": reqID})
 	})
 
 	// MCP poll result (CLI polls this after sending /api/mcp)
 	mux.HandleFunc("/api/mcp/result", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		reqID := r.URL.Query().Get("request_id")
 		if reqID == "" {
 			writeJSON(w, 400, map[string]string{"error": "missing request_id"})
@@ -607,7 +868,9 @@ func runServer(port int, user, pass string, extraArgs []string) {
 	// ═══ File Store path ═══
 	// 优先用环境变量，否则用可执行文件同级目录下的 filestore/
 	filestoreDir := func() string {
-		if v := os.Getenv("C2_FILESTORE"); v != "" { return v }
+		if v := os.Getenv("C2_FILESTORE"); v != "" {
+			return v
+		}
 		exePath, _ := os.Executable()
 		return filepath.Join(filepath.Dir(exePath), "filestore")
 	}()
@@ -615,15 +878,20 @@ func runServer(port int, user, pass string, extraArgs []string) {
 	// ═══ Runtime Sync ═══
 	// Agent pulls embedded runtime (Python/Node) — agent auth required
 	mux.HandleFunc("/api/runtime", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAgentAuth(r, agentKey, r.Header.Get("X-Agent-HWID"), agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, r.Header.Get("X-Agent-HWID"), agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		// 列出可用运行时
 		var runtimes []map[string]interface{}
 		entries, _ := os.ReadDir(filestoreDir)
 		for _, e := range entries {
-			if e.IsDir() { continue }
+			if e.IsDir() {
+				continue
+			}
 			name := e.Name()
 			// 只暴露 python/node 嵌入式包
-			if len(name) > 4 && (name[:6] == "python" || name[:4] == "node") && name[len(name)-4:] == ".zip" {
+			if isRuntimeZip(name) {
 				info, _ := e.Info()
 				runtimes = append(runtimes, map[string]interface{}{
 					"name": name, "size": info.Size(),
@@ -633,7 +901,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 		writeJSON(w, 200, runtimes)
 	})
 	mux.HandleFunc("/api/runtime/get", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAgentAuth(r, agentKey, r.Header.Get("X-Agent-HWID"), agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, r.Header.Get("X-Agent-HWID"), agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		name := r.URL.Query().Get("name")
 		path, err := safeJoin(filestoreDir, name)
 		if err != nil {
@@ -642,7 +913,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			return
 		}
 		info, err := os.Stat(path)
-		if err != nil { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "not found"})
+			return
+		}
 		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(name))
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 		http.ServeFile(w, r, path)
@@ -651,7 +925,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 	// ═══ Plugin Sync ═══
 	// Agent pulls plugin list from server (agent auth required)
 	mux.HandleFunc("/api/plugins", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAgentAuth(r, agentKey, r.Header.Get("X-Agent-HWID"), agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, r.Header.Get("X-Agent-HWID"), agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		pluginDir := filepath.Join(filestoreDir, "plugins")
 		entries, err := os.ReadDir(pluginDir)
 		if err != nil {
@@ -699,7 +976,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 
 	// Agent pulls a file from plugin directory (agent auth required)
 	mux.HandleFunc("/api/plugins/get", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAgentAuth(r, agentKey, r.Header.Get("X-Agent-HWID"), agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, r.Header.Get("X-Agent-HWID"), agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		name := r.URL.Query().Get("name") // e.g. "shell_exec/plugin.json"
 		// 先在 filestore/plugins/ 下找，再回退到 filestore/ 根目录，两处都做路径校验
 		path, err := safeJoin(filepath.Join(filestoreDir, "plugins"), name)
@@ -713,7 +993,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			path = altPath
 		}
 		info, err := os.Stat(path)
-		if err != nil { writeJSON(w, 404, map[string]string{"error": "not found: " + name}); return }
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "not found: " + name})
+			return
+		}
 		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(name))
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 		http.ServeFile(w, r, path)
@@ -723,9 +1006,15 @@ func runServer(port int, user, pass string, extraArgs []string) {
 
 	// List files
 	mux.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		entries, err := os.ReadDir(filestoreDir)
-		if err != nil { writeJSON(w, 500, map[string]string{"error": "read dir failed"}); return }
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "read dir failed"})
+			return
+		}
 		var files []map[string]interface{}
 		for _, e := range entries {
 			info, _ := e.Info()
@@ -738,7 +1027,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 
 	// List directory contents (panel file explorer) — ?path=<relative-dir>
 	mux.HandleFunc("/api/files/list", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		sub := r.URL.Query().Get("path")
 		dir := filestoreDir
 		if sub != "" {
@@ -751,7 +1043,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			dir = p
 		}
 		entries, err := os.ReadDir(dir)
-		if err != nil { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "not found"})
+			return
+		}
 		var files []map[string]interface{}
 		for _, e := range entries {
 			info, _ := e.Info()
@@ -765,7 +1060,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 
 	// Delete file (panel file explorer) — ?name=<relative-path>
 	mux.HandleFunc("/api/files/delete", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		if r.Method != "POST" && r.Method != "DELETE" {
 			writeJSON(w, 405, map[string]string{"error": "POST/DELETE required"})
 			return
@@ -784,7 +1082,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			return
 		}
 		info, err := os.Stat(path)
-		if err != nil { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "not found"})
+			return
+		}
 		if info.IsDir() {
 			writeJSON(w, 400, map[string]string{"error": "directory delete not supported"})
 			return
@@ -800,7 +1101,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 
 	// Download file (panel/CLI pulls this)
 	mux.HandleFunc("/api/files/download", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		name := r.URL.Query().Get("name")
 		path, err := safeJoin(filestoreDir, name)
 		if err != nil {
@@ -809,7 +1113,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			return
 		}
 		info, err := os.Stat(path)
-		if err != nil { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "not found"})
+			return
+		}
 		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(name))
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 		http.ServeFile(w, r, path)
@@ -817,10 +1124,16 @@ func runServer(port int, user, pass string, extraArgs []string) {
 
 	// Upload file (panel pushes this)
 	mux.HandleFunc("/api/files/upload", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // 64 MB 上限
 		file, handler, err := r.FormFile("file")
-		if err != nil { writeJSON(w, 400, map[string]string{"error": "no file"}); return }
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"error": "no file"})
+			return
+		}
 		defer file.Close()
 		// 文件名只取 basename 并做路径校验，阻止 "..\..\evil.exe" 写入任意位置
 		safeName := filepath.Base(filepath.FromSlash(strings.ReplaceAll(handler.Filename, "\\", "/")))
@@ -831,30 +1144,51 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			return
 		}
 		dst, err := os.Create(dstPath)
-		if err != nil { writeJSON(w, 500, map[string]string{"error": "create failed"}); return }
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "create failed"})
+			return
+		}
 		defer dst.Close()
-		io.Copy(dst, file)
-		log.Printf("[Server] File uploaded: %s (%d bytes)", safeName, handler.Size)
+		written, err := io.Copy(dst, file)
+		if err != nil {
+			log.Printf("[Server] 上传写入失败: %s -> %v", safeName, err)
+			writeJSON(w, 500, map[string]string{"error": "write failed"})
+			return
+		}
+		log.Printf("[Server] File uploaded: %s (%d bytes, 声明 %d)", safeName, written, handler.Size)
 		writeJSON(w, 200, map[string]interface{}{"ok": true, "name": safeName, "size": handler.Size})
 	})
 
 	// Deploy file to agent (enqueue download command)
 	mux.HandleFunc("/api/files/deploy", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(r, sessions) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAuth(r, sessions) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		var body struct {
 			AgentHWID string `json:"agent_hwid"`
 			FileName  string `json:"file_name"`
 			TargetDir string `json:"target_dir"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
+		if !agents.HasKey(body.AgentHWID) {
+			writeJSON(w, 404, map[string]string{"error": "unknown agent hwid"})
+			return
+		}
 		cmdData, _ := json.Marshal(body)
-		cmds.Enqueue(body.AgentHWID, "deploy_file", string(cmdData))
+		if _, err := cmds.Enqueue(body.AgentHWID, "deploy_file", string(cmdData)); err != nil {
+			writeJSON(w, 429, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, 200, map[string]interface{}{"ok": true, "status": "dispatched"})
 	})
 
 	// Download file (agent pulls this — agent auth required)
 	mux.HandleFunc("/api/files/get", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAgentAuth(r, agentKey, r.Header.Get("X-Agent-HWID"), agents) { writeJSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if !checkAgentAuth(r, r.Header.Get("X-Agent-HWID"), agents) {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
 		name := r.URL.Query().Get("name")
 		path, err := safeJoin(filestoreDir, name)
 		if err != nil {
@@ -863,7 +1197,10 @@ func runServer(port int, user, pass string, extraArgs []string) {
 			return
 		}
 		info, err := os.Stat(path)
-		if err != nil { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "not found"})
+			return
+		}
 		w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(name))
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 		http.ServeFile(w, r, path)
@@ -881,6 +1218,11 @@ func runServer(port int, user, pass string, extraArgs []string) {
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
+		// 反慢速攻击：头阶段必须有超时。
+		// 不设 Read/WriteTimeout 是刻意的：文件上传与运行时下载可能长时间传输，
+		// 改用 ReadHeaderTimeout + MaxBytesReader(1MB/64MB) 兜住内存。
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
@@ -890,6 +1232,17 @@ func runServer(port int, user, pass string, extraArgs []string) {
 	log.Printf("[TLS] 证书 SHA-256 指纹: %s", fingerprint)
 	log.Printf("[TLS] 将此指纹填入客户端 PINNED_CERT_SHA256 常量（StubCore.cpp）")
 	log.Fatal(srv.ListenAndServeTLS(certFile, keyFile))
+}
+
+// isRuntimeZip 判断文件名是否为可下发的嵌入式运行时包名。
+// 注意：原实现用 name[:6] 切片且守卫为 len(name) > 4，长度为 5 的
+// 文件名会直接 panic（slice bounds out of range [:6] with length 5）。
+func isRuntimeZip(name string) bool {
+	low := strings.ToLower(name)
+	if !strings.HasSuffix(low, ".zip") {
+		return false
+	}
+	return strings.HasPrefix(low, "python") || strings.HasPrefix(low, "node")
 }
 
 func writeJSON(w http.ResponseWriter, code int, v interface{}) {
@@ -965,7 +1318,7 @@ func loadOrCreateAgentKey() string {
 // checkAgentAuth 校验 agent 请求（常数时间比较）。
 // 仅按 hwid 校验该机器的独立密钥；引导密钥只允许在 register 接口使用
 // （checkBootstrapAuth），避免引导密钥长期可用削弱 per-agent 隔离。
-func checkAgentAuth(r *http.Request, key string, hwid string, agents *AgentRegistry) bool {
+func checkAgentAuth(r *http.Request, hwid string, agents *AgentRegistry) bool {
 	got := r.Header.Get("X-Agent-Key")
 	if got == "" || hwid == "" || agents == nil {
 		return false
@@ -999,14 +1352,10 @@ func checkAuth(r *http.Request, s *SessionManager) bool {
 	return false
 }
 
-func genKey(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)[:n]
-}
-
 func min(a, b int) int {
-	if a < b { return a }
+	if a < b {
+		return a
+	}
 	return b
 }
 
@@ -1035,7 +1384,10 @@ func runAgentCmd(args []string) {
 		resp := getJSON(base+"/api/agents", token)
 		fmt.Println(string(resp))
 	case "info":
-		if len(args) < 2 { fmt.Println("需提供 hwid"); os.Exit(1) }
+		if len(args) < 2 {
+			fmt.Println("需提供 hwid")
+			os.Exit(1)
+		}
 		resp := getJSON(base+"/api/agents", token)
 		var agents []map[string]interface{}
 		json.Unmarshal(resp, &agents)
@@ -1112,7 +1464,9 @@ func login(base string) string {
 	req, _ := http.NewRequest("POST", base+"/api/login", bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := cliClient.Do(req)
-	if err != nil { return "" }
+	if err != nil {
+		return ""
+	}
 	defer resp.Body.Close()
 	// 从 Set-Cookie 拿 token
 	for _, c := range resp.Cookies() {
@@ -1125,9 +1479,13 @@ func login(base string) string {
 
 func getJSON(url, token string) []byte {
 	req, _ := http.NewRequest("GET", url, nil)
-	if token != "" { req.Header.Set("Cookie", "c2session="+token) }
+	if token != "" {
+		req.Header.Set("Cookie", "c2session="+token)
+	}
 	resp, err := cliClient.Do(req)
-	if err != nil { return nil }
+	if err != nil {
+		return nil
+	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	return data
@@ -1137,9 +1495,13 @@ func postJSON(url, token string, body interface{}) []byte {
 	data, _ := json.Marshal(body)
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" { req.Header.Set("Cookie", "c2session="+token) }
+	if token != "" {
+		req.Header.Set("Cookie", "c2session="+token)
+	}
 	resp, err := cliClient.Do(req)
-	if err != nil { return nil }
+	if err != nil {
+		return nil
+	}
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
 	return out

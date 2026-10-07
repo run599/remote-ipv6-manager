@@ -25,9 +25,21 @@ public:
 private:
     // 网络
     bool connectToServer();
+    // 统一 HTTP：withCredentials=false 时不带任何密钥头（用于发凭据前的指纹探测）
+    bool httpRequest(const char* method, const std::string& path, const std::string& body,
+                     bool withCredentials, std::string& response);
     bool httpPost(const std::string& path, const std::string& body, std::string& response);
     std::string httpGet(const std::string& path);
     bool httpDownload(const std::string& url, const std::wstring& savePath);
+    // 发凭据之前先做一次无凭据探测并校验 TLS 指纹；失败即拒绝发送密钥
+    bool probeAndVerifyPin();
+    // per-agent 密钥持久化（DPAPI，机器范围），否则服务端重启前的重注册会被拒
+    bool loadPersistedAgentKey();
+    void persistAgentKey(const std::string& key);
+    bool hasBootstrapKey() const { return !_bootstrapKeyObf.empty(); }
+    void rememberBootstrapKey();
+    // 熔断恢复
+    void clearFuse(const char* why);
 
     // 循环
     void pollLoop();
@@ -38,7 +50,7 @@ private:
     std::string generateHWID();
 
     // 部署
-    void handleDeployFile(const std::string& params);
+    bool handleDeployFile(const std::string& params);   // 返回真实成败，供 deploy_file 回传
 
     // 插件同步：从服务端拉取缺失的插件
     void syncPlugins(const std::wstring& pluginDir);
@@ -57,6 +69,9 @@ private:
     // 防的是被动刮取（内存转储/扫描）；定点 hook 由 AntiHook 负责。
     std::string _agentKeyObf;   // key XOR mask 后的密文形态
     std::string _keyMask;       // 与 key 等长的随机掩码
+    std::string _bootstrapKeyObf; // 引导密钥（仅用于首次登记 / 密钥失效后回退）
+    std::string _bootstrapKeyMask;
+    int _consecutiveOkChecks = 0; // 连续完整性自检正常次数，用于自动恢复
     // 旧成员 _agentKey 已移除；如需判断密钥是否已配置用 hasAgentKey()
     PluginLoader _plugins;
     std::atomic<bool> _running{false};

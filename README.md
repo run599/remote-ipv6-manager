@@ -24,15 +24,28 @@
 ## ✨ 特性
 
 ### 🌐 IPv6 自愈（核心）
-- 覆盖家庭场景常见 v6 残疾：地址未分配、网关缺失、MTU 异常、防火墙阻断
-- 修复后逐级验证（ping6 → TCP → HTTP），不瞎修
+- 覆盖两类最常见的 v6 残疾：**无全球地址**（RA/SLAAC 未下发 → 用 C2 的 /64 前缀
+  与 link-local 主机标识补一个地址）与**默认网关缺失**（补 ::/0，优先用 link-local 网关）
+- 修复后做一次 ping6 验证并写日志（失败不阻断，Stub 会继续重试）
+- ⚠️ **未实现**：MTU 检查、防火墙 ICMPv6 规则、DHCPv6 重取、`ipv6 reset`；
+  详见 `docs/network-fix.md` 的「明确未实现的能力」
 - IPv6 公网直连被控端，无需公网 IPv4、无需端口映射、无需 frp/ngrok
 
 ### 🔐 安全设计
-- **全链路 TLS**（1.2+）：客户端证书指纹固定（pinning），杜绝中间人
-- **per-agent 密钥**：每台客户端注册后换取独立密钥，单机泄露不波及其他节点；引导密钥仅用于首次注册
-- **完整性自检（AntiHook）**：客户端周期性比对关键 API 入口内存字节与磁盘原始 DLL，检测篡改后随心跳上报、停止执行新指令（检测→上报→熔断）
-- 服务端：登录限速、会话过期、路径穿越防护、请求体大小限制
+- **全链路 TLS**（1.2+）+ **发凭据前校验指纹**：客户端先做一次无凭据的
+  `GET /api/health` 探测并校验证书 SHA-256 指纹，通过后才发送引导密钥；
+  明文 `http://` 直接拒绝启动（不降级）
+- **per-agent 密钥**：引导密钥仅用于**首次登记**一个全新 hwid；已登记的 hwid
+  只接受它自己那把密钥（`409 already enrolled`），杜绝"持有引导密钥即可冒名接管"
+- **密钥持久化**：客户端把 per-agent 密钥用 DPAPI（机器范围）存到
+  `%ProgramData%\RemoteIPv6Manager\agent.key`，重启后无需再用引导密钥
+- **完整性自检（AntiHook）三态**：一致 / 确认被篡改 / 无法验证。
+  只有"确认被篡改"才熔断；"无法验证"（模块未加载、转发导出）只告警，
+  且支持 `POST /api/integrity/clear?hwid=...` 由运维解除熔断
+- 服务端：登录指数退避限速、会话过期、路径穿越防护、请求体与队列上限、
+  未知 hwid 拒绝入队、结果归属校验（他机 request_id 无法伪造）
+- 密钥不经命令行传递：提权时把有效配置写入受限 DACL 的临时文件
+  （`--agent-key` 已移除，密钥对同机任何进程都不可见）
 
 ### 🧩 MCP 插件架构
 - 插件为独立进程（Python），崩溃不影响主程序
@@ -104,8 +117,13 @@ server=https://[2001:db8:YOUR-SERVER-IPv6-HERE]:8443
 agent_key=<服务端 agent.key 的内容>
 ```
 
-也支持环境变量 `R6M_SERVER` / `R6M_AGENT_KEY` 或命令行参数 `--server` / `--agent-key`。
-优先级：命令行 > 环境变量 > r6m.ini。
+也支持环境变量 `R6M_SERVER` / `R6M_AGENT_KEY`，以及命令行参数 `--server`。
+优先级：命令行（仅 `--server`）> 环境变量 > `r6m.ini`。
+
+> `--agent-key` 已于 2026-10-07 移除：命令行对本机任何进程可读
+> （WMI / 任务管理器 / EDR 日志），密钥放在那里等于公开。
+> 密钥请走 `r6m.ini` 或 `R6M_AGENT_KEY`；UAC 提权时程序会自动把有效配置
+> 写入受限 DACL 的临时文件并让提升后的进程读取（读完即删）。
 
 首次运行流程（全自动）：
 1. UAC 提权（IPv6 路由修复需要）
@@ -124,7 +142,31 @@ c2-server mcp call <hwid> execute '{"command":"whoami"}'      # 远程命令
 c2-server mcp call <hwid> list_processes '{}'                 # 进程列表
 ```
 
-**面板**：Qt/QML 图形界面（Agent 列表 / Shell / MCP 工具 / 文件管理 / 批量任务），见 `panel/` 目录。
+**面板**：Qt/QML 图形界面（Agent 列表 / Shell / MCP 工具 / 文件 / 截屏），见 `panel/` 目录。
+
+```bash
+cd panel
+cmake -B build -G "Visual Studio 17 2022" -A x64   # 需要 Qt6 (Quick/QuickControls2/Network)
+cmake --build build --config Release
+```
+
+> 构建的是 QML 版（`src/qml_main.cpp`）。`src/` 下另有一套 QtWidgets 实现
+> （MainWindow/AgentListWidget/... 约 1100 行），与 QML 版功能重复且各自定义了
+> `main()`，默认**不参与构建**（`-DPANEL_LEGACY_WIDGETS=ON` 可单独构建）。
+>
+> 已知边界：文件页的「上传/下载/删除」需要被控端的 `file_manager` 插件，
+> 本仓库只附带 `shell_exec` / `process_list` / `screen_capture` 三个插件，
+> 因此这三个按钮会明确提示"未实现"而不是静默无响应。
+
+## 🛠 运维端点（面板/CLI 之外）
+
+| 端点 | 用途 |
+|---|---|
+| `GET /api/health` | 无凭据探针，供客户端在发密钥前校验 TLS 指纹 |
+| `POST /api/integrity/clear?hwid=<hwid>` | 运维确认排查完毕后解除该 agent 的熔断（下次 poll 下发） |
+| `POST /api/agent/rekey?hwid=<hwid>` | 吊销某 hwid 的 per-agent 密钥，允许其用引导密钥重新登记（换机/重装场景） |
+
+三个端点都需要面板会话（`c2session`）认证（`/api/health` 除外）。
 
 ## 🔧 工作原理
 

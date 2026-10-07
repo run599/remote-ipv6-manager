@@ -23,9 +23,15 @@
 struct ApiIntegrityReport {
     std::string function;   // e.g. "EncryptMessage"
     std::string module;     // 实际拥有该函数的模块名
-    bool intact;            // false = 检测到入口代码被篡改
+    bool intact;            // 是否逐字节一致
     std::string detail;     // 差异描述或失败原因
+    // 三态：0=一致 1=确认被改（tampered） 2=无法验证（unverifiable）
+    // 关键区分：模块没加载 / 转发导出 / 权限不足 都属"无法验证"，
+    // 原实现把它们与"被篡改"混为一谈，会让 agent 永久熔断且无恢复通道。
+    int state;
 };
+
+enum AntiHookState { AH_INTACT = 0, AH_TAMPERED = 1, AH_UNVERIFIABLE = 2 };
 
 class AntiHook {
 public:
@@ -38,6 +44,10 @@ public:
 
     // 关键 API 是否被篡改（用于熔断判断；未验证也视为不可信）
     static bool IsCompromised();
+    // 是否存在"确认被篡改"的函数
+    static bool HasTampered(const std::vector<ApiIntegrityReport>& reports);
+    // 是否存在"无法验证"的函数
+    static bool HasUnverifiable(const std::vector<ApiIntegrityReport>& reports);
 
     // 上报用摘要："ok" 或 "tampered:EncryptMessage,ReadFile"
     static std::string SummaryForHeartbeat();

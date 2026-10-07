@@ -1,5 +1,10 @@
 # IPv6 自愈技术文档
 
+> **范围说明（2026-10-07）**：本文是**人工排查手册**。
+> 下面绝大多数诊断/修复命令（MTU、防火墙、`ipv6 reset`、DHCPv6 重取等）
+> 并没有被 `NetworkFix` 自动化，代码里实际做的事见 `docs/network-fix.md`
+> 的「实际执行流程」与「明确未实现的能力」两节。
+
 ## 为什么需要 IPv6 自愈？
 
 国内大量用户的 IPv6 处于"半残疾"状态：
@@ -71,7 +76,7 @@ netsh interface ipv6 set route ::/0 "以太网" fe80::1 publish=yes
 1. `ipconfig /all` → 确认全局地址存在
 2. `ping6 fe80::1%<if>` → 网关可达
 3. `ping6 2001:4860:4860::8888` → 外网可达
-4. `curl -6 http://[your-server]:8080/api/status` → 服务端可达
+4. `curl -6 -k https://[your-server]:8443/api/health` → 服务端可达（无凭据探针）
 
 ## 实际案例
 

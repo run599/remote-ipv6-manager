@@ -83,7 +83,11 @@ void AgentListWidget::onFilterChanged() {
         i0->setForeground(a.online ? QColor("#34c759") : QColor("#c7c7cc"));
         i0->setTextAlignment(Qt::AlignCenter);
         _table->setItem(i, 0, i0);
-        _table->setItem(i, 1, new QTableWidgetItem(a.hwid.left(16)));
+        // 显示截断、数据完整：原来把 left(16) 的值当唯一 ID 下发，
+        // 会让命令打到错误的机器上（前 16 字符相同即冲突）
+        QTableWidgetItem* hwidItem = new QTableWidgetItem(a.hwid.left(16));
+        hwidItem->setData(Qt::UserRole, a.hwid);
+        _table->setItem(i, 1, hwidItem);
         _table->setItem(i, 2, new QTableWidgetItem(a.user + " · " + a.os.left(20)));
     }
     updateBadge();
@@ -98,7 +102,7 @@ void AgentListWidget::updateBadge() {
 void AgentListWidget::onRowClicked() {
     int row = _table->currentRow();
     if (row >= 0 && row < _table->rowCount()) {
-        QString hwid = _table->item(row, 1)->text();
+        QString hwid = _table->item(row, 1)->data(Qt::UserRole).toString();
         emit agentSelected(hwid);
     }
 }
@@ -117,7 +121,19 @@ void AgentListWidget::onContextMenu(const QPoint& pos) {
     QAction* act = menu.exec(_table->viewport()->mapToGlobal(pos));
     if (act == actDetail) showDetails();
     else if (act == actCopy) QApplication::clipboard()->setText(_table->item(_table->currentRow(), 1)->text());
-    else if (act == actCopy2) QApplication::clipboard()->setText(_table->item(_table->currentRow(), 3)->text());
+    else if (act == actCopy2) {
+        // 修复点：表格只有 3 列（0/1/2），item(row,3) 恒为 nullptr，
+        // 原来直接 ->text() 会访问违例崩溃（右键→复制 IP 必崩）。
+        // IP 本来就没在表格里展示，从 _agents 里按 HWID 取。
+        const int row = _table->currentRow();
+        if (row >= 0) {
+            QTableWidgetItem* it = _table->item(row, 1);
+            const QString hwid = it ? it->data(Qt::UserRole).toString() : QString();
+            for (const auto& a : _agents) {
+                if (a.hwid == hwid) { QApplication::clipboard()->setText(a.ip); break; }
+            }
+        }
+    }
 }
 
 void AgentListWidget::showDetails() {

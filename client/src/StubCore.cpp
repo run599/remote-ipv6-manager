@@ -2,6 +2,9 @@
 #include "Logger.h"
 #include "NetworkFix.h"
 #include "AntiHook.h"
+#include "Json.h"
+#include <map>
+#include <vector>
 #include <wininet.h>
 #include <wincrypt.h>
 #include <sstream>
@@ -24,8 +27,15 @@
 // 换用新服务器/重新生成证书时，将新指纹整串粘贴到下面常量并重新编译。
 // 注意：直接粘贴 hex 字符串，运行时逐字符比对 ——
 // 不要手工转成字节数组（历史上手抄错位导致全员连接失败）。
+//
+// 本仓库提交的是**全零占位符**，含义是"尚未配置"：IsPinConfigured() 返回 false，
+// VerifyServerCertPin() 随即拒绝连接（fail-closed —— 宁可连不上，也不静默接受未校验证书）。
+// 所以 clone 后必须替换，否则客户端不会连上任何服务端。取指纹的方式：
+//     openssl x509 -in server.crt -noout -fingerprint -sha256 | tr -d ':' | sed 's/.*=//'
+//   （服务端首次启动也会把指纹打印到日志）
+// 比对大小写不敏感（_stricmp）：openssl 默认输出大写、摘要按小写生成，两者混用不会失败。
 static const char* PINNED_CERT_SHA256_HEX =
-    "5220c8c75495c81cbb7dea42b1ad6930848d6e6060bf21fb31cdfe683c2a49a0";
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 // 校验 hex 字符串格式合法且非全零
 static bool IsPinConfigured() {
@@ -72,10 +82,17 @@ static bool VerifyServerCertPin(HINTERNET hReq) {
         DWORD dlen = sizeof(digest);
         if (CryptGetHashParam(hHash, HP_HASHVAL, digest, &dlen, 0)) {
             // digest 转 hex 字符串后与 pin 字符串逐字符比对（杜绝手抄字节错位）
+            //
+            // 2026-10-07 修复：此处原为 strcmp（区分大小写），而本函数用 "%02x" 生成小写，
+            // 服务器日志/openssl 打印的却是大写（openssl x509 -fingerprint 默认大写）。
+            // 于是"按文档从服务端复制指纹填进来"必然得到 got=小写 / want=大写 的不匹配，
+            // 客户端会以"疑似中间人"为由拒绝连接，且错误信息里两串看起来完全一样，
+            // 极难排查（实测：三处 TCP 连接全部 ESTABLISHED，唯独卡在这一行）。
+            // 指纹是十六进制，大小写无信息量差异，故改为大小写不敏感比较。
             char got[65];
             for (int i = 0; i < 32; i++) snprintf(got + i * 2, 3, "%02x", digest[i]);
             got[64] = 0;
-            ok = (dlen == 32) && (strcmp(got, PINNED_CERT_SHA256_HEX) == 0);
+            ok = (dlen == 32) && (_stricmp(got, PINNED_CERT_SHA256_HEX) == 0);
             if (!ok) {
                 LOG_E("TLS", ("证书指纹不匹配！got=" + std::string(got) + " want=" + std::string(PINNED_CERT_SHA256_HEX)).c_str());
             }
@@ -104,11 +121,113 @@ static void SetupSelfSignedTls(HINTERNET hReq) {
 static bool IsValidRemoteName(const std::string& name) {
     if (name.empty() || name.size() > 200) return false;
     if (name.find("..") != std::string::npos) return false;
-    for (char c : name) {
-        bool ok = (isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-'
-                   || c == '/' || c == '\\' || c == ' ');
+    // 前导分隔符：'\Windows\System32' 会被解析成当前盘根，等于允许写任意位置
+    if (name[0] == '\\' || name[0] == '/') return false;
+    // 尾部点/空格在 Windows 上会被静默剥离，导致"校验的名字"与"实际落盘的名字"不同
+    char last = name[name.size() - 1];
+    if (last == '.' || last == ' ') return false;
+    for (size_t i = 0; i < name.size(); i++) {
+        char c = name[i];
+        bool ok = (isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-' ||
+                   c == '/' || c == '\\' || c == ' ');
         if (!ok) return false;
     }
+    // 保留设备名：CON/PRN/AUX/NUL/COM1-9/LPT1-9（含带扩展名形式，如 CON.txt）
+    std::string base = name;
+    size_t slash = base.find_last_of("/\\");
+    if (slash != std::string::npos) base = base.substr(slash + 1);
+    size_t dot = base.find('.');
+    std::string stem = (dot == std::string::npos) ? base : base.substr(0, dot);
+    for (size_t i = 0; i < stem.size(); i++) stem[i] = (char)toupper((unsigned char)stem[i]);
+    if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") return false;
+    if (stem.size() == 4 && (stem.compare(0, 3, "COM") == 0 || stem.compare(0, 3, "LPT") == 0) &&
+        stem[3] >= '1' && stem[3] <= '9') {
+        return false;
+    }
+    return true;
+}
+
+// ── 基础设施辅助 ──────────────────────────────────────────────
+
+static std::string Utf8FromWide(const std::wstring& ws) {
+    if (ws.empty()) return std::string();
+    int len = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), (int)ws.size(), nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return std::string();
+    std::string out((size_t)len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), (int)ws.size(), &out[0], len, nullptr, nullptr);
+    return out;
+}
+
+static std::wstring WideFromUtf8(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (len <= 0) return std::wstring();
+    std::wstring out((size_t)len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], len);
+    return out;
+}
+
+// SHA-256 → 64 位小写 hex（用系统 CSP，不引第三方库）
+static std::string Sha256Hex(const std::string& data) {
+    HCRYPTPROV hProv = 0;
+    HCRYPTHASH hHash = 0;
+    std::string out;
+    if (!CryptAcquireContextW(&hProv, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) return out;
+    if (!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) { CryptReleaseContext(hProv, 0); return out; }
+    if (CryptHashData(hHash, (const BYTE*)data.data(), (DWORD)data.size(), 0)) {
+        BYTE digest[32] = {};
+        DWORD dlen = sizeof(digest);
+        if (CryptGetHashParam(hHash, HP_HASHVAL, digest, &dlen, 0) && dlen == 32) {
+            char buf[65] = {};
+            for (int i = 0; i < 32; i++) snprintf(buf + i * 2, 3, "%02x", digest[i]);
+            out.assign(buf, 64);
+        }
+    }
+    CryptDestroyHash(hHash);
+    CryptReleaseContext(hProv, 0);
+    return out;
+}
+
+static std::string ReadRegString(HKEY root, const wchar_t* subkey, const wchar_t* value) {
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(root, subkey, 0, KEY_READ | KEY_WOW64_64KEY, &hKey) != ERROR_SUCCESS) return std::string();
+    wchar_t buf[512] = {};
+    DWORD cb = sizeof(buf) - sizeof(wchar_t);
+    DWORD type = 0;
+    LSTATUS st = RegQueryValueExW(hKey, value, nullptr, &type, (LPBYTE)buf, &cb);
+    RegCloseKey(hKey);
+    if (st != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) return std::string();
+    return Utf8FromWide(buf);
+}
+
+// per-agent 密钥持久化位置：%ProgramData%\RemoteIPv6Manager\agent.key
+// 内容用 DPAPI 机器范围加密（CryptProtectData），替换 r6m.ini 里的引导密钥长期使用。
+static std::wstring AgentKeyStorePath() {
+    wchar_t programData[MAX_PATH] = {};
+    DWORD n = GetEnvironmentVariableW(L"ProgramData", programData, MAX_PATH);
+    std::wstring dir = (n > 0 && n < MAX_PATH) ? std::wstring(programData) : std::wstring(L"C:\\ProgramData");
+    dir += L"\\RemoteIPv6Manager";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    return dir + L"\\agent.key";
+}
+
+static bool DpapiProtect(const std::string& plain, std::vector<BYTE>& out) {
+    DATA_BLOB in = { (DWORD)plain.size(), (BYTE*)plain.data() };
+    DATA_BLOB enc = {};
+    if (!CryptProtectData(&in, L"r6m-agent-key", nullptr, nullptr, nullptr,
+                          CRYPTPROTECT_LOCAL_MACHINE, &enc)) return false;
+    out.assign(enc.pbData, enc.pbData + enc.cbData);
+    LocalFree(enc.pbData);
+    return true;
+}
+
+static bool DpapiUnprotect(const std::vector<BYTE>& enc, std::string& plain) {
+    if (enc.empty()) return false;
+    DATA_BLOB in = { (DWORD)enc.size(), (BYTE*)enc.data() };
+    DATA_BLOB dec = {};
+    if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_LOCAL_MACHINE, &dec)) return false;
+    plain.assign((const char*)dec.pbData, dec.cbData);
+    LocalFree(dec.pbData);
     return true;
 }
 
@@ -204,6 +323,12 @@ StubCore::StubCore() {
         }
     }
 
+    // 引导密钥留一份副本：持久化密钥失效（服务端换了/被吊销）时要能回退
+    rememberBootstrapKey();
+    if (loadPersistedAgentKey()) {
+        LOG_I("Stub", "已装入本机持久化 per-agent 密钥（无需再用引导密钥登记）");
+    }
+
     LOG_I("Stub", "Setting up HTTP session...");
     _hSession = InternetOpenA("Mozilla/5.0", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
     if (_hSession) {
@@ -225,11 +350,19 @@ StubCore::~StubCore() {
 
 // ── HTTP ──
 
-bool StubCore::httpPost(const std::string& path, const std::string& body, std::string& response) {
-    std::string url = _serverUrl + path;
-    LOG_D("HTTP", ("POST " + url).c_str());
+bool StubCore::httpRequest(const char* method, const std::string& path, const std::string& body,
+                           bool withCredentials, std::string& response) {
+    response.clear();
 
-    // Use HttpOpenRequest for better IPv6 support
+    // 明文 HTTP 直接拒绝：密钥、指令、文件内容全部裸奔，没有任何"降级可用"的余地
+    if (_serverUrl.compare(0, 8, "https://") != 0) {
+        LOG_E("HTTP", "服务器地址必须是 https://（当前非 https），拒绝发送任何数据");
+        return false;
+    }
+
+    std::string url = _serverUrl + path;
+    LOG_D("HTTP", ((std::string(method) + " " + url).c_str()));
+
     URL_COMPONENTS urlComp = {};
     urlComp.dwStructSize = sizeof(urlComp);
     urlComp.dwSchemeLength = 1;
@@ -237,14 +370,10 @@ bool StubCore::httpPost(const std::string& path, const std::string& body, std::s
     urlComp.dwUrlPathLength = 1;
     urlComp.dwExtraInfoLength = 1;
 
-    wchar_t wUrl[1024];
-    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, wUrl, 1024);
-
     if (!InternetCrackUrlA(url.c_str(), (DWORD)url.size(), 0, &urlComp)) {
         LOG_E("HTTP", "URL parse failed");
         return false;
     }
-
     std::string host(urlComp.lpszHostName, urlComp.dwHostNameLength);
     std::string pathStr(urlComp.lpszUrlPath, urlComp.dwUrlPathLength);
     if (urlComp.dwExtraInfoLength > 0) {
@@ -265,7 +394,7 @@ bool StubCore::httpPost(const std::string& path, const std::string& body, std::s
     DWORD reqFlags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI;
     if (isHttps) reqFlags |= INTERNET_FLAG_SECURE;
 
-    HINTERNET hReq = HttpOpenRequestA(hConn, "POST", pathStr.c_str(), nullptr, nullptr,
+    HINTERNET hReq = HttpOpenRequestA(hConn, method, pathStr.c_str(), nullptr, nullptr,
         nullptr, reqFlags, 0);
     if (!hReq) {
         LOG_E("HTTP", "HttpOpenRequest failed");
@@ -273,22 +402,21 @@ bool StubCore::httpPost(const std::string& path, const std::string& body, std::s
         return false;
     }
 
-    // 自签证书场景：信任由指纹固定（pinning）把关，而非系统信任链
     if (isHttps) SetupSelfSignedTls(hReq);
 
-    // Set timeout (30 seconds)
     DWORD timeout = 30000;
     InternetSetOption(hReq, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
     InternetSetOption(hReq, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
 
-    std::string headers = "Content-Type: application/json\r\n";
-    // 密钥头：栈上解码进 headers，发送完成后整串擦除（方案1+2）
-    {
+    std::string headers;
+    if (!body.empty()) headers += "Content-Type: application/json\r\n";
+    if (withCredentials) {
         std::string keyHdr = BuildAgentKeyHeader(_agentKeyObf, _keyMask, _hwid);
         headers += keyHdr;
         WipeString(keyHdr);
     }
-    if (!HttpSendRequestA(hReq, headers.c_str(), (DWORD)headers.size(), (LPVOID)body.c_str(), (DWORD)body.size())) {
+    if (!HttpSendRequestA(hReq, headers.empty() ? nullptr : headers.c_str(), (DWORD)headers.size(),
+                          body.empty() ? nullptr : (LPVOID)body.c_str(), (DWORD)body.size())) {
         LOG_E("HTTP", "HttpSendRequestA failed");
         WipeString(headers);
         InternetCloseHandle(hReq);
@@ -297,7 +425,8 @@ bool StubCore::httpPost(const std::string& path, const std::string& body, std::s
     }
     WipeString(headers); // 含密钥明文，发送后立即擦
 
-    // TLS 指纹校验：不匹配即断连，绝不降级
+    // 指纹复核（纵深防御）。注意：真正的保护在 probeAndVerifyPin()——
+    // 凭据只在探测通过之后才可能被发出去，所以中间人拿不到密钥。
     if (isHttps && !VerifyServerCertPin(hReq)) {
         InternetCloseHandle(hReq);
         InternetCloseHandle(hConn);
@@ -318,83 +447,94 @@ bool StubCore::httpPost(const std::string& path, const std::string& body, std::s
     return true;
 }
 
+bool StubCore::httpPost(const std::string& path, const std::string& body, std::string& response) {
+    return httpRequest("POST", path, body, true, response);
+}
+
 std::string StubCore::httpGet(const std::string& path) {
-    std::string url = _serverUrl + path;
+    std::string resp;
+    httpRequest("GET", path, std::string(), true, resp);
+    return resp;
+}
 
-    // 与 httpPost 相同结构：需要先设安全标志再发请求，并在发送后校验指纹
-    URL_COMPONENTS urlComp = {};
-    urlComp.dwStructSize = sizeof(urlComp);
-    urlComp.dwSchemeLength = 1;
-    urlComp.dwHostNameLength = 1;
-    urlComp.dwUrlPathLength = 1;
-    urlComp.dwExtraInfoLength = 1;
-
-    if (!InternetCrackUrlA(url.c_str(), (DWORD)url.size(), 0, &urlComp)) {
-        LOG_E("HTTP", "URL parse failed");
-        return "";
+// 两阶段连接的关键第一步：不带任何凭据请求 /api/health，
+// 此时过网的只有一次 TLS 握手与一个无敏感信息的 GET。
+// 指纹不匹配 → 直接失败 → 引导密钥与 per-agent 密钥从不离开本机。
+bool StubCore::probeAndVerifyPin() {
+    if (!IsPinConfigured()) {
+        LOG_E("TLS", "未配置 PINNED_CERT_SHA256 指纹，拒绝连接");
+        return false;
     }
-    std::string host(urlComp.lpszHostName, urlComp.dwHostNameLength);
-    std::string pathStr(urlComp.lpszUrlPath, urlComp.dwUrlPathLength);
-    if (urlComp.dwExtraInfoLength > 0) {
-        pathStr += std::string(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength);
+    std::string resp;
+    if (!httpRequest("GET", "/api/health", std::string(), false, resp)) {
+        LOG_W("TLS", "无凭据探测失败（网络不可达或证书指纹不匹配）");
+        return false;
     }
-    int port = urlComp.nPort;
-    bool isHttps = (urlComp.nScheme == INTERNET_SCHEME_HTTPS);
-
-    HINTERNET hConn = InternetConnectA(_hSession, host.c_str(), (INTERNET_PORT)port,
-        nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0);
-    if (!hConn) {
-        LOG_E("HTTP", "InternetConnect failed");
-        return "";
+    r6m::Json j;
+    std::string err;
+    if (!r6m::Json::parse(resp, j, &err) || !j.getBool("ok", false)) {
+        LOG_E("TLS", ("探测响应异常，拒绝继续: " + resp.substr(0, 120)).c_str());
+        return false;
     }
+    LOG_I("TLS", "指纹校验通过（凭据尚未发送）");
+    return true;
+}
 
-    DWORD reqFlags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI;
-    if (isHttps) reqFlags |= INTERNET_FLAG_SECURE;
-
-    HINTERNET hReq = HttpOpenRequestA(hConn, "GET", pathStr.c_str(), nullptr, nullptr,
-        nullptr, reqFlags, 0);
-    if (!hReq) {
-        LOG_E("HTTP", "HttpOpenRequest failed");
-        InternetCloseHandle(hConn);
-        return "";
+// ── per-agent 密钥持久化（DPAPI 机器范围）──
+bool StubCore::loadPersistedAgentKey() {
+    std::wstring path = AgentKeyStorePath();
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD size = GetFileSize(h, nullptr);
+    if (size == INVALID_FILE_SIZE || size == 0 || size > 8192) { CloseHandle(h); return false; }
+    std::vector<BYTE> enc(size);
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, enc.data(), size, &got, nullptr);
+    CloseHandle(h);
+    if (!ok || got != size) return false;
+    std::string plain;
+    if (!DpapiUnprotect(enc, plain) || plain.empty()) {
+        LOG_W("Stub", "持久化密钥解密失败（换了机器/用户？），将回退引导密钥重新登记");
+        return false;
     }
+    setAgentKeyPlain(plain.c_str());
+    SecureZeroMemory(&plain[0], plain.size());
+    return true;
+}
 
-    if (isHttps) SetupSelfSignedTls(hReq);
-
-    DWORD timeout = 30000;
-    InternetSetOptionA(hReq, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
-    InternetSetOptionA(hReq, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
-
-    std::string headers = BuildAgentKeyHeader(_agentKeyObf, _keyMask, _hwid);
-    if (!HttpSendRequestA(hReq, headers.empty() ? nullptr : headers.c_str(),
-        (DWORD)headers.size(), nullptr, 0)) {
-        LOG_E("HTTP", "HttpSendRequestA failed");
-        WipeString(headers);
-        InternetCloseHandle(hReq);
-        InternetCloseHandle(hConn);
-        return "";
+void StubCore::persistAgentKey(const std::string& key) {
+    std::vector<BYTE> enc;
+    if (!DpapiProtect(key, enc)) {
+        LOG_W("Stub", "DPAPI 加密失败，密钥无法持久化（重启后需重新登记）");
+        return;
     }
-    WipeString(headers); // 含密钥明文，发送后立即擦
-
-    if (isHttps && !VerifyServerCertPin(hReq)) {
-        InternetCloseHandle(hReq);
-        InternetCloseHandle(hConn);
-        return "";
+    std::wstring path = AgentKeyStorePath();
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_HIDDEN, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        LOG_W("Stub", ("无法写入持久化密钥（err=" + std::to_string(GetLastError()) + "）").c_str());
+        return;
     }
+    DWORD written = 0;
+    WriteFile(h, enc.data(), (DWORD)enc.size(), &written, nullptr);
+    CloseHandle(h);
+    LOG_I("Stub", "per-agent 密钥已持久化（DPAPI 机器范围）");
+}
 
-    char buf[65536];
-    DWORD bytesRead = 0;
-    std::string result;
-    while (InternetReadFile(hReq, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
-        buf[bytesRead] = 0;
-        result += buf;
-    }
-    InternetCloseHandle(hReq);
-    InternetCloseHandle(hConn);
-    return result;
+void StubCore::rememberBootstrapKey() {
+    _bootstrapKeyObf = _agentKeyObf;
+    _bootstrapKeyMask = _keyMask;
+}
+
+void StubCore::clearFuse(const char* why) {
+    _integrityCompromised = false;
+    _consecutiveOkChecks = 0;
+    LOG_W("Stub", (std::string("完整性熔断已解除（") + why + "），恢复指令执行").c_str());
 }
 
 // ── 主循环 ──
+
 
 void StubCore::run(const std::wstring& pluginDir) {
     _running = true;
@@ -408,14 +548,20 @@ void StubCore::run(const std::wstring& pluginDir) {
             std::wstring ws(argv[i + 1]);
             _serverUrl = std::string(ws.begin(), ws.end());
         }
-        if (std::wstring(argv[i]) == L"--agent-key" && i + 1 < argc) {
-            std::wstring ws(argv[i + 1]);
-            setAgentKeyPlain(std::string(ws.begin(), ws.end()).c_str());
+        if (std::wstring(argv[i]) == L"--agent-key") {
+            // 已移除：命令行对同机任何进程可读（WMI/任务管理器/EDR 日志），
+            // 引导密钥放这里等于公开。请改用 r6m.ini、R6M_AGENT_KEY 环境变量，
+            // 或提权时自动生成的受限 DACL 临时配置。
+            LOG_W("Stub", "--agent-key 不再支持（密钥不得经命令行传递），请改用 r6m.ini 或 R6M_AGENT_KEY");
+            if (i + 1 < argc) SecureZeroMemory(argv[i + 1], wcslen(argv[i + 1]) * sizeof(wchar_t));
         }
     }
     if (argv) LocalFree(argv);
-    if (_serverUrl.rfind("http://", 0) == 0) {
-        LOG_E("Stub", "拒绝使用明文 http:// 服务器地址 —— 请改用 https://（不降级）");
+    // 明文 URL 直接终止：原来是"只记一行日志然后照发密钥"
+    if (_serverUrl.compare(0, 8, "https://") != 0) {
+        LOG_E("Stub", "服务器地址必须以 https:// 开头，拒绝启动（不降级、不裸奔）");
+        _running = false;
+        return;
     }
     LOG_INFO("Stub", ("URL=" + _serverUrl).c_str());
 
@@ -447,11 +593,38 @@ void StubCore::run(const std::wstring& pluginDir) {
         LOG_INFO("Stub", "H: AntiHook baseline check");
         if (AntiHook::CheckCriticalApis(reports)) {
             LOG_INFO("Stub", "AntiHook baseline: all critical APIs intact");
-        } else {
+        } else if (AntiHook::HasTampered(reports)) {
             _integrityCompromised = true;
-            LOG_E("Stub", "AntiHook baseline: 检测到篡改，进入熔断状态（详见 AntiHook 日志）");
+            LOG_E("Stub", "AntiHook baseline: 确认关键 API 入口被篡改，进入熔断状态（详见 AntiHook 日志）");
+        } else {
+            // 仅"无法验证"（模块未加载/转发导出/权限不足）：告警但不熔断。
+            // 服务端可通过 POST /api/integrity/clear?hwid=... 下发解除。
+            LOG_WARN("Stub", "AntiHook baseline: 存在无法验证的关键 API，仅告警不熔断");
         }
         AntiHook::LogReports(reports);
+        if (AntiHook::HasUnverifiable(reports)) {
+            // 无法验证 ≠ 已被篡改：只告警，绝不因此熔断（原实现会让一次
+            // 未加载的模块/转发导出把 agent 永久锁死且无恢复通道）
+            LOG_WARN("Stub", "AntiHook: 存在无法验证的关键 API（已计入上报，不触发熔断）");
+        }
+    }
+
+    // E'：发凭据之前先校验 TLS 指纹（这一步过网的只有一次无凭据探测）
+    LOG_INFO("Stub", "E': TLS pin probe (before any credential)");
+    {
+        bool pinOk = false;
+        for (int attempt = 1; attempt <= 5 && !pinOk; ++attempt) {
+            pinOk = probeAndVerifyPin();
+            if (!pinOk) {
+                LOG_WARN("Stub", ("TLS 探测失败 " + std::to_string(attempt) + "/5，稍后重试").c_str());
+                std::this_thread::sleep_for(std::chrono::seconds(attempt * 3));
+            }
+        }
+        if (!pinOk) {
+            LOG_E("Stub", "TLS 指纹未能校验通过：拒绝发送任何密钥（疑似中间人，或服务端不可达）");
+            _running = false;
+            return;
+        }
     }
 
     LOG_INFO("Stub", "F: Connect");
@@ -488,10 +661,20 @@ void StubCore::run(const std::wstring& pluginDir) {
             try {
                 // 心跳携带完整性状态（三段式之二：上报）
                 std::string integrity = AntiHook::SummaryForHeartbeat();
-                if (integrity != "ok") {
-                    _integrityCompromised = true; // 三段式之三：置熔断标志
+                if (integrity.compare(0, 8, "tampered") == 0) {
+                    // 三段式之三：置熔断标志。只有"确认被篡改"才熔断，
+                    // "无法验证"（模块未加载/转发导出）由 AntiHook 归为 unverifiable，不熔断。
+                    _integrityCompromised = true;
+                    _consecutiveOkChecks = 0;
+                } else if (integrity == "ok") {
+                    if (++_consecutiveOkChecks >= 3 && _integrityCompromised) {
+                        clearFuse("连续 3 次完整性自检正常");
+                    }
                 }
-                std::string body = "{\"hwid\":\"" + _hwid + "\",\"integrity\":\"" + integrity + "\"}";
+                r6m::Json hb = r6m::Json::makeObject();
+                hb.set("hwid", r6m::Json::makeString(_hwid));
+                hb.set("integrity", r6m::Json::makeString(integrity));
+                std::string body = hb.dump();
                 std::string resp;
                 httpPost("/api/heartbeat", body, resp);
             } catch (...) {}
@@ -506,142 +689,211 @@ void StubCore::run(const std::wstring& pluginDir) {
 
 bool StubCore::connectToServer() {
     LOG_INFO("Stub", ("连接: " + _serverUrl).c_str());
-    std::string info = collectSystemInfo();
-    std::string body = "{\"hwid\":\"" + _hwid + "\",\"info\":" + info + "}";
-    std::string resp;
-    if (httpPost("/api/agent/register", body, resp)) {
-        LOG_INFO("Stub", "连接成功");
-        // per-agent 密钥：注册响应里下发本机独立密钥，热替换内存中的密钥。
-        // 之后所有请求自动使用新密钥（心跳/poll/result/下载）。
-        auto kp = resp.find("\"agent_key\"");
-        if (kp != std::string::npos) {
-            auto colon = resp.find(':', kp);
-            auto q1 = resp.find('"', colon + 1);
-            auto q2 = resp.find('"', q1 + 1);
-            if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1 + 1) {
-                std::string newKey = resp.substr(q1 + 1, q2 - q1 - 1);
-                setAgentKeyPlain(newKey.c_str());
-                // 擦除响应副本（含密钥明文）
-                SecureZeroMemory(&newKey[0], newKey.size());
-                newKey.clear();
-                WipeString(resp);
-                LOG_INFO("Stub", "已切换为本机独立密钥（per-agent key）");
+
+    // 用结构化方式构造注册体（计算机名/用户名含特殊字符时不会被拼坏）
+    r6m::Json info = r6m::Json::makeObject();
+    {
+        wchar_t computer[MAX_PATH] = {}; DWORD csz = MAX_PATH;
+        GetComputerNameW(computer, &csz);
+        wchar_t user[MAX_PATH] = {}; DWORD usz = MAX_PATH;
+        GetUserNameW(user, &usz);
+        unsigned int hash = 5381;
+        std::string cs = Utf8FromWide(computer);
+        for (size_t i = 0; i < cs.size(); i++) hash = ((hash << 5) + hash) + (unsigned char)cs[i];
+        info.set("computer", r6m::Json::makeString(cs));
+        info.set("user", r6m::Json::makeString(Utf8FromWide(user)));
+        // OS 版本：RtlGetVersion 拿真实内部版本号（GetVersionEx 会因清单被谎报）
+        std::string osName = "Windows";
+        {
+            typedef NTSTATUS(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+            auto fn = (RtlGetVersionPtr)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+            if (fn) {
+                RTL_OSVERSIONINFOW rovi = { sizeof(rovi) };
+                if (fn(&rovi) == 0) {
+                    char b[64] = {};
+                    snprintf(b, sizeof(b), "Windows %lu.%lu Build %lu",
+                             (unsigned long)rovi.dwMajorVersion, (unsigned long)rovi.dwMinorVersion,
+                             (unsigned long)rovi.dwBuildNumber);
+                    osName = b;
+                }
             }
         }
-        return true;
+        info.set("os", r6m::Json::makeString(osName));
+        info.set("arch", r6m::Json::makeString(sizeof(void*) == 8 ? "x64" : "x86"));
+        (void)hash;
     }
-    return false;
+
+    r6m::Json body = r6m::Json::makeObject();
+    body.set("hwid", r6m::Json::makeString(_hwid));
+    body.set("info", info);
+
+    std::string resp;
+    bool sent = httpPost("/api/agent/register", body.dump(), resp);
+
+    // 已登记 hwid 只认自己的 per-agent 密钥：若持久化密钥失效（服务端换过/被吊销），
+    // 回退用引导密钥重登记一次（仅限"确实拿不到有效密钥"这种情况）
+    if (sent) {
+        r6m::Json j;
+        std::string err;
+        if (r6m::Json::parse(resp, j, &err)) {
+            if (j.getString("agent_key").empty() && hasBootstrapKey() && !_bootstrapKeyObf.empty()) {
+                if (_agentKeyObf != _bootstrapKeyObf) {
+                    LOG_W("Stub", "服务端拒绝了当前密钥，回退引导密钥重新登记");
+                    std::string plain;   // 把引导密钥解码到栈上，用完即擦
+                    plain.reserve(_bootstrapKeyObf.size());
+                    for (size_t i = 0; i < _bootstrapKeyObf.size(); i++) {
+                        plain += (char)(_bootstrapKeyObf[i] ^ _bootstrapKeyMask[i]);
+                    }
+                    setAgentKeyPlain(plain.c_str());
+                    SecureZeroMemory(&plain[0], plain.size());
+                    sent = httpPost("/api/agent/register", body.dump(), resp);
+                }
+            }
+        }
+    }
+
+    if (!sent) return false;
+
+    r6m::Json j;
+    std::string err;
+    if (!r6m::Json::parse(resp, j, &err)) {
+        LOG_E("Stub", ("注册响应不是合法 JSON: " + err).c_str());
+        return false;
+    }
+    std::string newKey = j.getString("agent_key");
+    if (newKey.empty()) {
+        LOG_E("Stub", ("注册未返回 agent_key: " + resp.substr(0, 160)).c_str());
+        return false;
+    }
+    if (newKey != _agentKeyObf) {
+        setAgentKeyPlain(newKey.c_str());
+        persistAgentKey(newKey);
+        LOG_INFO("Stub", "已切换为本机独立密钥（per-agent key）");
+    }
+    SecureZeroMemory(&newKey[0], newKey.size());
+    WipeString(resp);
+    LOG_INFO("Stub", "连接成功");
+    return true;
 }
 
 void StubCore::pollLoop() {
     LOG_INFO("Stub", "开始轮询...");
     while (_running) {
         std::this_thread::sleep_for(std::chrono::seconds(3));
-        // 三段式之三：熔断 —— 关键 API 被篡改期间不拉取/执行新指令。
-        // 心跳线程仍在运行并持续上报完整性状态，等待人工确认恢复。
+
+        // 三段式之三：熔断 —— 关键 API 确实被篡改期间不拉取/执行新指令。
+        // （"无法验证"不再计入熔断；见 AntiHook 三态与 clearFuse 恢复通道）
         if (_integrityCompromised) {
-            LOG_E("Stub", "完整性熔断中：关键 API 疑似被篡改，暂停指令执行（心跳仍在上报）");
+            LOG_E("Stub", "完整性熔断中：关键 API 确认被篡改，暂停指令执行（心跳仍在上报）");
             std::this_thread::sleep_for(std::chrono::seconds(30));
             continue;
         }
+
         try {
-            std::string body = "{\"hwid\":\"" + _hwid + "\"}";
+            r6m::Json req = r6m::Json::makeObject();
+            req.set("hwid", r6m::Json::makeString(_hwid));
             std::string resp;
-            if (!httpPost("/api/agent/poll", body, resp)) continue;
+            if (!httpPost("/api/agent/poll", req.dump(), resp)) continue;
             if (resp.empty() || resp == "{}" || resp == "null") continue;
 
-            // Parse method from JSON response
-            std::string method;
-            auto mp = resp.find("\"method\"");
-            if (mp != std::string::npos) {
-                auto colon = resp.find(':', mp);
-                auto q1 = resp.find('"', colon + 1);
-                auto q2 = resp.find('"', q1 + 1);
-                if (q1 != std::string::npos && q2 != std::string::npos)
-                    method = resp.substr(q1 + 1, q2 - q1 - 1);
+            r6m::Json j;
+            std::string jerr;
+            if (!r6m::Json::parse(resp, j, &jerr)) {
+                // 原实现用字符串搜索解析，坏 JSON 会被当成"没有指令"静默吞掉
+                LOG_E("Stub", ("poll 响应解析失败: " + jerr).c_str());
+                continue;
             }
+
+            // 服务端下发的"解除熔断"（运维人工确认通道）
+            if (j.getBool("clear_integrity", false)) {
+                clearFuse("服务端下发解除指令");
+            }
+
+            std::string requestId = j.getString("request_id");
+            std::string method = j.getString("method");
             if (method.empty()) continue;
 
-            // Extract params (simple brace matching)
-            std::string params = "{}";
-            auto pp = resp.find("\"params\"");
-            if (pp != std::string::npos) {
-                auto pc = resp.find(':', pp);
-                auto pb = resp.find('{', pc);
-                if (pb != std::string::npos) {
-                    int depth = 1; size_t pe = pb + 1;
-                    while (depth > 0 && pe < resp.size()) {
-                        if (resp[pe] == '{') depth++;
-                        else if (resp[pe] == '}') depth--;
-                        pe++;
-                    }
-                    params = resp.substr(pb, pe - pb);
-                }
-            }
-            if (method.empty()) continue;
+            const r6m::Json* paramsNode = j.find("params");
+            std::string params = (paramsNode && paramsNode->isObject()) ? paramsNode->dump() : std::string("{}");
 
             LOG_INFO("Stub", ("指令: " + method).c_str());
 
-            // 解析 request_id（服务端新增）
-            std::string requestId;
-            auto rid = resp.find("\"request_id\"");
-            if (rid != std::string::npos) {
-                auto colon = resp.find(':', rid);
-                auto q1 = resp.find('"', colon + 1);
-                auto q2 = resp.find('"', q1 + 1);
-                if (q1 != std::string::npos && q2 != std::string::npos)
-                    requestId = resp.substr(q1 + 1, q2 - q1 - 1);
-            }
-
-            // 解析插件 ID：tools/call 时从工具映射表查插件，其他方法取前缀
-            std::string pluginId;
-            if (method == "tools/call") {
-                auto np = params.find("\"name\"");
-                std::string toolName;
-                if (np != std::string::npos) {
-                    auto colon = params.find(':', np);
-                    auto q1 = params.find('"', colon + 1);
-                    auto q2 = params.find('"', q1 + 1);
-                    if (q1 != std::string::npos && q2 != std::string::npos)
-                        toolName = params.substr(q1 + 1, q2 - q1 - 1);
-                }
-                pluginId = _plugins.resolvePluginForTool(toolName);
-                if (pluginId.empty()) {
-                    LOG_WARN("Stub", ("未找到处理工具 '" + toolName + "' 的插件").c_str());
-                    continue;
-                }
-            } else {
-                pluginId = method.substr(0, method.find('.'));
-            }
-
-            // 处理 deploy_file 指令
-            if (method == "deploy_file") {
-                LOG_INFO("Stub", "收到文件部署指令");
-                handleDeployFile(params);
-                // 回传部署结果
+            // 面板要工具清单：本地聚合所有插件的 tools/list（无需服务端新增接口）
+            if (method == "tools/list") {
+                std::string tools = _plugins.listAllTools();
                 if (!requestId.empty()) {
-                    std::string postBody = "{\"request_id\":\"" + requestId + "\",\"result\":{\"ok\":true}}";
-                    std::string resp2;
-                    httpPost("/api/agent/result", postBody, resp2);
-                    WipeString(postBody); WipeString(resp2);
+                    // 直接把聚合结果原样嵌入请求体（result 必须是合法 JSON 对象）
+                    std::string postBody = "{\"request_id\":\"" + requestId + "\",\"result\":" + tools + "}";
+                    std::string r2;
+                    httpPost("/api/agent/result", postBody, r2);
+                    WipeString(postBody); WipeString(r2);
                 }
                 WipeString(resp);
                 continue;
             }
 
-            // 分发给 MCP 插件
+            std::string pluginId;
+            if (method == "tools/call") {
+                const r6m::Json* nameNode = paramsNode ? paramsNode->find("name") : nullptr;
+                std::string toolName = nameNode ? nameNode->text : std::string();
+                pluginId = _plugins.resolvePluginForTool(toolName);
+                if (pluginId.empty()) {
+                    // 原实现直接 continue：服务端永远等不到结果，只能 30 秒超时。
+                    // 现在显式回传错误，调用方立刻知道原因。
+                    LOG_WARN("Stub", ("未找到处理工具 '" + toolName + "' 的插件").c_str());
+                    if (!requestId.empty()) {
+                        std::string postBody = "{\"request_id\":\"" + requestId +
+                            "\",\"result\":{\"error\":\"no plugin provides tool: " + toolName + "\"}}";
+                        std::string r2;
+                        httpPost("/api/agent/result", postBody, r2);
+                        WipeString(postBody); WipeString(r2);
+                    }
+                    WipeString(resp);
+                    continue;
+                }
+            } else {
+                size_t dot = method.find('.');
+                pluginId = (dot == std::string::npos) ? method : method.substr(0, dot);
+            }
+
+            if (method == "deploy_file") {
+                LOG_INFO("Stub", "收到文件部署指令");
+                bool ok = handleDeployFile(params);
+                if (!requestId.empty()) {
+                    r6m::Json res = r6m::Json::makeObject();
+                    res.set("ok", r6m::Json::makeBool(ok));
+                    if (!ok) res.set("error", r6m::Json::makeString("deploy failed, see client.log"));
+                    r6m::Json pr = r6m::Json::makeObject();
+                    pr.set("request_id", r6m::Json::makeString(requestId));
+                    pr.set("result", res);
+                    std::string resp2;
+                    httpPost("/api/agent/result", pr.dump(), resp2);
+                    WipeString(resp2);
+                }
+                WipeString(resp);
+                continue;
+            }
+
             std::string result = _plugins.callPlugin(pluginId, method, params);
             LOG_DEBUG("Stub", ("插件响应: " + result.substr(0, 200)).c_str());
 
-            // 回传结果（仅 tools/call 需要）
             if (!requestId.empty() && method == "tools/call") {
-                std::string postBody = "{\"request_id\":\"" + requestId + "\",\"result\":" + result + "}";
+                r6m::Json res;
+                std::string perr;
+                std::string resultJson = result;
+                if (!r6m::Json::parse(result, res, &perr)) {
+                    LOG_E("Stub", ("插件返回的不是合法 JSON: " + perr).c_str());
+                    resultJson = "{\"error\":\"plugin returned invalid json\"}";
+                }
+                r6m::Json pr = r6m::Json::makeObject();
+                pr.set("request_id", r6m::Json::makeString(requestId));
+                // 直接把插件的 result 原样嵌入，避免二次转义
+                std::string postBody = "{\"request_id\":\"" + requestId + "\",\"result\":" + resultJson + "}";
                 std::string resp2;
                 httpPost("/api/agent/result", postBody, resp2);
                 LOG_DEBUG("Stub", ("结果回传: " + resp2).c_str());
                 WipeString(postBody); WipeString(resp2);
             }
-            // 方案2：插件输出可能含敏感数据（文件内容/命令输出），用后擦除
             WipeString(result);
             WipeString(resp);
 
@@ -681,17 +933,40 @@ std::string StubCore::collectSystemInfo() {
 }
 
 std::string StubCore::generateHWID() {
-    // 基于 MAC + 计算机名生成稳定 HWID
+    // 低碰撞机器指纹：MachineGuid（系统安装时生成，全局唯一）+ 系统卷序列号 + 计算机名。
+    //
+    // 原实现只用计算机名做 32 位 DJB2 并窄化到 char（MSVC C4244），问题有三层：
+    //   ① "DESKTOP-XXXX" 这类名字极易碰撞；② 可离线枚举；③ 注释声称含 MAC 实际没有。
+    // 而服务端 per-agent 密钥是按 hwid 复用的，hwid 可枚举就等于身份可冒名。
+    std::string guid = ReadRegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Cryptography", L"MachineGuid");
+
     wchar_t computer[MAX_PATH] = {}; DWORD sz = MAX_PATH;
     GetComputerNameW(computer, &sz);
-    std::wstring ws(computer);
-    std::string s(ws.begin(), ws.end());
-    // 简单哈希
-    unsigned int hash = 5381;
-    for (char c : s) hash = ((hash << 5) + hash) + c;
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%08X", hash);
-    return std::string(buf);
+    std::string cs = Utf8FromWide(computer);
+
+    DWORD volSerial = 0;
+    wchar_t sysDir[MAX_PATH] = {};
+    if (GetSystemDirectoryW(sysDir, MAX_PATH) >= 3) {
+        wchar_t root[4] = { sysDir[0], L':', L'\\', 0 };
+        GetVolumeInformationW(root, nullptr, 0, &volSerial, nullptr, nullptr, nullptr, 0);
+    }
+    char volHex[16] = {};
+    snprintf(volHex, sizeof(volHex), "%08X", volSerial);
+
+    std::string material = guid + "|" + cs + "|" + volHex;
+    std::string digest = Sha256Hex(material);
+    if (digest.size() < 32) {
+        // 机器签名不可用（极少见）：明确告警并退回计算机名哈希，不静默降级
+        LOG_W("Stub", "机器指纹计算失败（CSP 不可用？），退回计算机名哈希，碰撞风险高");
+        unsigned int hash = 5381;
+        for (size_t i = 0; i < cs.size(); i++) hash = ((hash << 5) + hash) + (unsigned char)cs[i];
+        char buf[32] = {};
+        snprintf(buf, sizeof(buf), "%08X", hash);
+        return std::string(buf);
+    }
+    std::string hwid = digest.substr(0, 32);
+    LOG_I("Stub", ("HWID = " + hwid + "（MachineGuid + 卷序列号 + 计算机名）").c_str());
+    return hwid;
 }
 
 // ═══════════════════════════════════════════════
@@ -817,81 +1092,104 @@ bool StubCore::httpDownload(const std::string& url, const std::wstring& savePath
     return true;
 }
 
-void StubCore::handleDeployFile(const std::string& params) {
-    std::string fileName, targetDir;
-    auto fn = params.find("\"file_name\"");
-    if (fn != std::string::npos) {
-        auto c = params.find(':', fn);
-        auto q1 = params.find('"', c + 1);
-        auto q2 = params.find('"', q1 + 1);
-        if (q1 != std::string::npos && q2 != std::string::npos)
-            fileName = params.substr(q1 + 1, q2 - q1 - 1);
+bool StubCore::handleDeployFile(const std::string& params) {
+    r6m::Json p;
+    std::string perr;
+    if (!r6m::Json::parse(params, p, &perr)) {
+        LOG_E("Deploy", ("部署参数不是合法 JSON: " + perr).c_str());
+        return false;
     }
-    auto td = params.find("\"target_dir\"");
-    if (td != std::string::npos) {
-        auto c = params.find(':', td);
-        auto q1 = params.find('"', c + 1);
-        auto q2 = params.find('"', q1 + 1);
-        if (q1 != std::string::npos && q2 != std::string::npos)
-            targetDir = params.substr(q1 + 1, q2 - q1 - 1);
+    std::string fileName = p.getString("file_name");
+    std::string targetDir = p.getString("target_dir");
+
+    if (fileName.empty()) {
+        LOG_E("Deploy", "empty filename");
+        return false;
     }
-    for (size_t i = 0; i < fileName.size(); ) {
-        if (fileName[i] == '\\' && i + 1 < fileName.size() && fileName[i + 1] == '\\')
-            fileName.erase(i, 1); else i++;
-    }
-    for (size_t i = 0; i < targetDir.size(); ) {
-        if (targetDir[i] == '\\' && i + 1 < targetDir.size() && targetDir[i + 1] == '\\')
-            targetDir.erase(i, 1); else i++;
-    }
-    if (fileName.empty()) { LOG_E("Deploy", "empty filename"); return; }
-    // 安全校验：拒绝携带引号/命令分隔符/路径穿越的文件名（防 cmd 注入与 Zip Slip）
-    if (!IsValidRemoteName(fileName)) {
+    // 文件名只允许裸文件名（不允许目录分隔符）；修复前 "\Windows\System32" 这类
+    // 前导反斜杠能通过校验并被 CreateDirectoryA 解析成当前盘根
+    if (!IsValidRemoteName(fileName) || fileName.find('/') != std::string::npos ||
+        fileName.find('\\') != std::string::npos) {
         LOG_E("Deploy", ("非法文件名，拒绝部署: " + fileName).c_str());
-        return;
+        return false;
     }
     if (!targetDir.empty() && !IsValidRemoteName(targetDir)) {
         LOG_E("Deploy", ("非法目标目录，拒绝部署: " + targetDir).c_str());
-        return;
+        return false;
     }
     if (targetDir.empty()) {
         wchar_t ep[MAX_PATH] = {};
         GetModuleFileNameW(nullptr, ep, MAX_PATH);
-        std::wstring ws(ep); ws = ws.substr(0, ws.find_last_of(L'\\'));
-        targetDir = std::string(ws.begin(), ws.end()) + "\\plugins";
+        std::wstring ws(ep);
+        ws = ws.substr(0, ws.find_last_of(L'\\'));
+        targetDir = Utf8FromWide(ws) + "\\plugins";
     }
     LOG_I("Deploy", ("deploy: " + fileName + " -> " + targetDir).c_str());
-    // create nested dirs
-    for (size_t p = 0; p < targetDir.size(); p++) {
-        if (targetDir[p] == '\\' || targetDir[p] == '/') {
-            std::string sub = targetDir.substr(0, p);
-            if (!sub.empty()) CreateDirectoryA(sub.c_str(), nullptr);
+
+    std::wstring targetDirW = WideFromUtf8(targetDir);
+    std::wstring fileNameW = WideFromUtf8(fileName);
+
+    // 逐级创建目录（用宽字符 API，中文路径不会乱码）
+    {
+        std::wstring acc;
+        for (size_t i = 0; i < targetDirW.size(); i++) {
+            acc += targetDirW[i];
+            if (targetDirW[i] == L'\\' || targetDirW[i] == L'/') {
+                if (acc.size() > 3) CreateDirectoryW(acc.c_str(), nullptr);
+            }
         }
+        CreateDirectoryW(targetDirW.c_str(), nullptr);
     }
-    CreateDirectoryA(targetDir.c_str(), nullptr);
+
     std::string url = _serverUrl + "/api/files/get?name=" + fileName;
-    std::wstring save = std::wstring(targetDir.begin(), targetDir.end()) + L"\\" + std::wstring(fileName.begin(), fileName.end());
-    if (!httpDownload(url, save)) { LOG_E("Deploy", "download failed"); return; }
+    std::wstring save = targetDirW + L"\\" + fileNameW;
+    if (!httpDownload(url, save)) {
+        LOG_E("Deploy", "download failed");
+        return false;
+    }
     LOG_I("Deploy", "download ok");
-    if (fileName.size() > 4 && fileName.substr(fileName.size() - 4) == ".zip") {
+
+    if (fileName.size() > 4 && fileName.compare(fileName.size() - 4, 4, ".zip") == 0) {
         LOG_I("Deploy", "extracting zip...");
         std::string unzipDir = targetDir + "\\" + fileName.substr(0, fileName.size() - 4);
-        CreateDirectoryA(unzipDir.c_str(), nullptr);
-        std::wstring cmd = L"cmd /c tar -xf \""
-            + std::wstring(save.begin(), save.end())
-            + L"\" -C \"" + std::wstring(unzipDir.begin(), unzipDir.end()) + L"\"";
+        std::wstring unzipDirW = WideFromUtf8(unzipDir);
+        CreateDirectoryW(unzipDirW.c_str(), nullptr);
+
+        // 直接用系统自带 tar.exe，不再套 cmd.exe：
+        // 少一层 shell 解析，也少一个"未知父进程拉起 cmd"的可疑行为面。
+        wchar_t sysDir[MAX_PATH] = {};
+        GetSystemDirectoryW(sysDir, MAX_PATH);
+        std::wstring tarExe = std::wstring(sysDir) + L"\\tar.exe";
+        if (GetFileAttributesW(tarExe.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            LOG_E("Deploy", "系统未提供 tar.exe（需 Win10 1803+），zip 未解压");
+            return false;
+        }
+        std::wstring cmdLine = L"\"" + tarExe + L"\" -xf \"" + save + L"\" -C \"" + unzipDirW + L"\"";
+        std::vector<wchar_t> mutableCmd(cmdLine.begin(), cmdLine.end());
+        mutableCmd.push_back(L'\0');
+
         STARTUPINFOW si = { sizeof(si) };
         PROCESS_INFORMATION pi = {};
-        if (CreateProcessW(nullptr, (LPWSTR)cmd.c_str(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                          nullptr, nullptr, &si, &pi)) {
-            WaitForSingleObject(pi.hProcess, 120000);
-            DWORD exitCode = 0;
-            GetExitCodeProcess(pi.hProcess, &exitCode);
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            LOG_I("Deploy", ("extracted: " + unzipDir + " exit=" + std::to_string(exitCode)).c_str());
-        } else { LOG_E("Deploy", "extract failed"); }
+        if (!CreateProcessW(nullptr, mutableCmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                            nullptr, nullptr, &si, &pi)) {
+            LOG_E("Deploy", ("解压进程启动失败 err=" + std::to_string(GetLastError())).c_str());
+            return false;
+        }
+        WaitForSingleObject(pi.hProcess, 120000);
+        DWORD exitCode = 1;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        if (exitCode != 0) {
+            LOG_E("Deploy", ("解压失败 exit=" + std::to_string(exitCode)).c_str());
+            return false;
+        }
+        LOG_I("Deploy", ("extracted: " + unzipDir).c_str());
     }
-    _plugins.scanPlugins(std::wstring(targetDir.begin(), targetDir.end()));
+
+    _plugins.scanPlugins(WideFromUtf8(targetDir));
     LOG_I("Deploy", "rescan done");
+    return true;
 }
 
 // ═══════════════════════════════════════════════
@@ -1091,3 +1389,4 @@ void StubCore::syncPlugins(const std::wstring& pluginDir) {
 
     LOG_I("Sync", ("=== syncPlugins done, downloaded " + std::to_string(downloaded) + " plugins ===").c_str());
 }
+

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import C2Panel
 
 Rectangle {
     id: shellTab
@@ -38,7 +39,9 @@ Rectangle {
                     font.family: "SF Mono, Cascadia Code, Consolas, monospace"
                     font.pixelSize: 13
                 }
-                onCountChanged: currentIndex = count - 1
+                // currentIndex 只影响高亮/键盘导航，不会滚动视图；
+                // 正确做法是显式滚到底部（否则用户以为"命令没反应"）
+                onCountChanged: Qt.callLater(outputView.positionViewAtEnd)
             }
         }
 
@@ -57,8 +60,8 @@ Rectangle {
                     font.pixelSize: 11
                     onClicked: {
                         if (modelData.cmd) shellTab.execCmd(modelData.cmd)
-                        else if (index === 1) mcp.callTool(hwid, serverUrl, cookie, "list_processes", '{"sort_by":"mem","limit":20}')
-                        else if (index === 2) mcp.callTool(hwid, serverUrl, cookie, "screenshot", '{"scale":2}')
+                        else if (index === 1) mcp.callTool(hwid, serverUrl, cookie, "list_processes", '{"sort_by":"mem","limit":20}', "shell")
+                        else if (index === 2) mcp.callTool(hwid, serverUrl, cookie, "screenshot", '{"scale":2}', "shell")
                     }
                 }
             }
@@ -96,24 +99,26 @@ Rectangle {
         appendOutput("$ " + cmd, "#CDD6F4")
         cmdInput.text = ""
         mcp.callTool(hwid, serverUrl, cookie, "execute",
-            JSON.stringify({"command": cmd, "timeout": 30}))
+            JSON.stringify({"command": cmd, "timeout": 30}), "shell")
     }
 
     Connections {
         target: mcp
-        function onToolResult(result) {
-            if (result.indexOf("error") >= 0) {
-                appendOutput("[error] " + result, "#F38BA8")
+        function onToolResult(tool, result, source) {
+            if (source !== "shell") return
+            var obj = null
+            try { obj = JSON.parse(result) } catch (e) { obj = null }
+            if (obj === null) { appendOutput(result, "#A6E3A1"); return }
+            // 按字段判错：原来只要输出里含 "error" 子串就整段标红
+            // （findstr error、日志内容、字段名 error_count 都会被误判）
+            if (obj.error !== undefined) {
+                appendOutput("[error] " + obj.error, "#F38BA8")
+                return
+            }
+            if (obj.content && obj.content[0] && obj.content[0].text !== undefined) {
+                appendOutput(obj.content[0].text, "#A6E3A1")
             } else {
-                // 解析 JSON
-                try {
-                    var obj = JSON.parse(result)
-                    if (obj.content && obj.content[0]) {
-                        appendOutput(obj.content[0].text, "#A6E3A1")
-                    }
-                } catch(e) {
-                    appendOutput(result, "#A6E3A1")
-                }
+                appendOutput(JSON.stringify(obj, null, 2), "#CDD6F4")
             }
         }
     }

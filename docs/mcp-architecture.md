@@ -53,6 +53,18 @@ plugins/
 }
 ```
 
+## 协议约定（2026-10-07 对齐）
+
+- 传输：一行一个 JSON 消息（`\n` 分帧）。stdout 只允许出现 JSON，
+  所有日志走 stderr（客户端有专门的排空线程，不会被写满卡住）。
+- 响应必须是 `{"jsonrpc":"2.0","id":<原 id>,"result":{...}}`；
+  错误用 `{"jsonrpc":"2.0","id":<原 id>,"error":{"code":...,"message":...}}`。
+- 无 `id` 的请求是通知，执行但不回应。
+- 必须实现 `shutdown`：回执后退出。否则客户端只能等 3 秒再强杀。
+- `tools/list` 返回 `{"tools":[{"name","description","inputSchema"}]}`；
+  客户端**只取数组元素顶层的 name**（旧实现把 inputSchema 里的 name 也当工具名，
+  导致工具映射被污染）。
+
 ## 插件加载流程
 
 1. 客户端启动 → `PluginLoader::scanPlugins()` 扫描 `plugins/` 目录
@@ -87,15 +99,32 @@ def handle_request(req):
     
     return {"error": "unknown method"}
 
-# 主循环
+# 主循环（注意 result 包裹与 shutdown 处理）
+def _send(obj):
+    print(json.dumps(obj, ensure_ascii=False), flush=True)   # stdout 每行只能是一个 JSON
+
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 for line in sys.stdin:
-    req = json.loads(line.strip())
-    resp = handle_request(req)
-    resp["jsonrpc"] = "2.0"
-    resp["id"] = req.get("id")
-    print(json.dumps(resp, ensure_ascii=False), flush=True)
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    rid = req.get("id")
+    if req.get("method") == "shutdown":        # 必须实现：客户端靠它优雅退出
+        if rid is not None:
+            _send({"jsonrpc": "2.0", "id": rid, "result": {"ok": True, "bye": True}})
+        return
+    payload = handle_request(req)
+    if rid is None:
+        continue                               # 通知：执行但不回应
+    # 关键：工具结果必须包在 result 里。原实现直接平铺（{"tools":[...]}），
+    # 与本文档上面的协议示例自相矛盾，标准 MCP 客户端会解析失败。
+    _send({"jsonrpc": "2.0", "id": rid, "result": payload})
 ```
+
+> 客户端侧对应实现见 `client/src/PluginLoader.cpp`：请求 id 自增、
+> 按 `id` 匹配应答、按 `\n` 分帧、把 `result` 解出来交给调用方。
+> 插件往 stdout 打任何非 JSON 内容都会被忽略（只记一条日志）。
 
 ## 与传统 DLL 插件的对比
 

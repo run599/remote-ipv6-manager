@@ -1,5 +1,8 @@
 <RCC>
-    <qresource prefix="/">
+    <!-- 资源路径 = prefix + 条目名。C++ 侧必须加载 qrc:/C2Panel/main.qml，
+         且 qmldir 也要进资源，Theme 的 singleton 声明才生效。 -->
+    <qresource prefix="/C2Panel">
+        <file>qmldir</file>
         <file>main.qml</file>
         <file>Theme.qml</file>
         <file>LoginPage.qml</file>

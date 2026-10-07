@@ -252,7 +252,7 @@ void MainWindow::setupUi() {
         btn->setFixedHeight(30);
         segLayout->addWidget(btn);
         tabBtns.append(btn);
-        connect(btn, &QPushButton::clicked, this, [this, i, &tabBtns]() {
+        connect(btn, &QPushButton::clicked, this, [this, i, tabBtns]() {   // 按值捕获：原来按引用捕获局部 QList，函数返回后即悬垂
             _rightStack->setCurrentIndex(i);
             for (int j = 0; j < tabBtns.size(); j++) tabBtns[j]->setChecked(j == i);
         });
@@ -355,6 +355,7 @@ void MainWindow::onAgentSelected(const QString& hwid) {
     _mcpPanel->setSelectedAgent(hwid, _serverUrl, _cookie);
     _shellTerminal->setAgent(hwid, _serverUrl, _cookie);
     _fileExplorer->setAgent(hwid, _serverUrl, _cookie);
+    _taskOrchestrator->setSelectedAgent(hwid);   // 让"仅选中 Agent"分支真的可用
     refreshAll();
 }
 

@@ -1,100 +1,89 @@
 # NetworkFix 实现详解
 
+> 本文档于 2026-10-07 按实际代码重写。
+> 上一版描述了一整套并不存在的 API（`FixResult diagnoseAndFix()` /
+> `IPv6Status checkIPv6Status()` / `std::vector<Problem> diagnose()` /
+> `FixResult applyFixes()` / `bool verifyConnectivity()` / `execCmd` /
+> `pingIPv6` / `testTCP`），以及 MTU 检查、防火墙规则、四级验证等
+> 代码里一行都没有的功能。现按 `client/src/NetworkFix.cpp` 的真实行为描述。
+
 ## 概述
 
-`NetworkFix.cpp` 是本项目的核心创新点——**IPv6 自愈模块**。它能自动诊断并修复 Windows 设备的 IPv6 连接问题，覆盖 90% 的家庭 IPv6 残疾场景。
+`NetworkFix` 的职责非常窄：**在建立管理通道之前，让本机具备一条能到达服务端的
+IPv6 路径**。它不是通用的 IPv6 体检工具。
 
-## 架构
+对外只有两个入口（`client/src/NetworkFix.h`，全文 11 行）：
 
 ```cpp
 class NetworkFix {
 public:
-    // 完整自愈流程：检测 → 诊断 → 修复 → 验证
-    FixResult diagnoseAndFix();
-    
-private:
-    // 各阶段
-    IPv6Status checkIPv6Status();        // 检测 IPv6 状态
-    std::vector<Problem> diagnose();     // 诊断问题列表
-    FixResult applyFixes();              // 执行修复
-    bool verifyConnectivity();           // 验证连通性
-    
-    // 底层工具
-    std::string execCmd(const char* cmd);  // 执行命令
-    bool pingIPv6(const std::string& addr); // ping6 测试
-    bool testTCP(const std::string& addr, int port); // TCP 连接测试
+    // 入口：路由 + DNS + 连通性验证
+    static void FixAll(const std::string& serverUrl);
+    // ping 服务端 IPv6，供 Stub 启动前调用
+    static bool VerifyC2Reachable(const std::string& serverUrl);
 };
 ```
 
-## 诊断规则
+## 实际执行流程（`FixAll`）
 
-| 检查项 | 正常 | 异常 | 修复 |
-|--------|------|------|------|
-| IPv6 全局状态 | disabled=false | disabled=true | `netsh ... set global disabled=false` |
-| 接口地址 | 有 2xxx::/48 或 /64 | 只有 fe80:: | `netsh ... set address dhcp` |
-| 默认网关 | 有 ::/0 路由 | 缺失 | 从 RA 重新获取 |
-| MTU | >= 1280 | < 1280 | `netsh ... set subinterfaces mtu=1500` |
-| ICMPv6 防火墙 | 允许 | 阻断 | 添加允许规则 |
-| TCP 连通性 | 可达 | 超时 | 检查路由/前缀 |
-
-## 修复策略
-
-修复按依赖顺序执行：
-1. 先启用 IPv6 全局开关
-2. 再修复接口配置（地址、网关）
-3. 然后修复 MTU
-4. 最后修复防火墙
-
-每个修复步骤都记录前后状态，确保可回滚。
-
-## 验证流程
-
-修复后逐级验证：
 ```
-Level 1: ping6 fe80::1%<interface>  → 链路本地连通
-Level 2: ping6 2001:4860:4860::8888 → 外网 ICMPv6 可达
-Level 3: TCP 连接 [2001:4860:4860::8888]:443 → TCP 可达
-Level 4: HTTP GET http://[your-server]/api/status → 服务可达
+1. 从 serverUrl 里取方括号中的 IPv6（https://[240e:...::1]:8443 → 240e:...::1）
+   取不到就直接返回（IPv4/域名场景不做任何事）
+2. SetupIPv6Routes(target)   ← 枚举网卡，按需补路由
+3. SetupIPv6DNS()            ← 保留原 IPv4 DNS，追加公共 IPv6 DNS，刷新缓存
+4. PingC2(target)            ← ping -6 -n 3，仅记日志，失败不阻断
 ```
 
-## 实际修复案例
+### SetupIPv6Routes 做什么
 
-### 案例：iStoreOS 路由器 IPv6 不通
+1. `GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX)` 枚举所有网卡；
+2. 跳过 `OperStatus != IfOperStatusUp` 与未启用 IPv6 的接口；
+3. 找第一个**全球单播地址**（排除 link-local `fe80::/10`、ULA `fc00::/7`、`::`、`::1`），
+   取其高 64 位作为 on-link 前缀：
+   - `netsh interface ipv6 add route <prefix>::/64 interface=<idx>`（退出码 1 视为"已存在"，不算错）
+   - 找该接口上的 link-local 网关，加 `netsh interface ipv6 add route ::/0 interface=<idx> nexthop=<gw>`
+   - 没有网关时退化为 on-link 默认路由：`netsh interface ipv6 add route ::/0 interface=<idx>`
+4. **兜底分支**：若所有接口都没有全球地址（典型：光猫没下发 RA/SLAAC），
+   但有 link-local，则用「C2 的 /64 前缀 + 本机 link-local 主机标识」手工补一个地址，
+   再补一条该前缀的直连路由。
 
-**输入**：
-```
-IPv6 Enabled: True
-Addresses: fe80::1%eth0
-No global address
-No default gateway
-```
+`GetC2Prefix` 于 2026-10-07 修正：原实现"数到第 4 个冒号就截断"，遇到压缩写法
+（`2001:db8::1` 只有 2 个冒号）会把整串当成前缀，拼出 `2001:db8::1::/64` 这种非法地址，
+netsh 失败又被 `allowNonZero` 吞掉，导致兜底地址静默失效。现改为 `InetPtonW` 解析后
+按字节取高 64 位，任何合法写法都能得到正确前缀。
 
-**诊断**：
-```
-[✓] IPv6 已启用
-[✗] 无全局地址 → DHCPv6/SLAAC 未生效
-[✗] 无默认网关 → RA 未接收
-```
+### SetupIPv6DNS 做什么
 
-**修复**：
-```
-netsh interface ipv6 set address "eth0" dhcp
-netsh interface ipv6 set dnsserver "eth0" dhcp
-→ 重新获取 RA → 获得全局地址 + 网关
-```
+`Get-NetAdapter` → 逐个 Up 网卡 → 读出原 IPv4 DNS → `Set-DnsClientServerAddress`
+把它与 `2400:3200::1`、`2400:3200::2` 一起写入 → `ipconfig /flushdns`。
 
-**验证**：
-```
-ping6 fe80::1%eth0 → OK
-ping6 2001:4860:4860::8888 → OK
-TCP [2001:4860:4860::8888]:443 → OK
-```
+2026-10-07 修正两处：
+- 去掉 `-ExecutionPolicy Bypass`（`-Command` 本来不受执行策略约束，
+  这个参数除了给端点安全产品一个显眼的可疑特征之外没有任何作用）；
+- 删掉固定 `nslookup your-domain.duckdns.org` —— 占位域名在任何真实环境都必然失败，
+  只污染日志。DNS 是否生效由随后的 `PingC2` 与注册请求来判定。
 
-## 与现有方案的对比
+## 明确未实现的能力（不要再按旧文档去"找"）
 
-| | 手动排查 | 自动脚本 | NetworkFix |
-|---|---|---|---|
-| 速度 | 30-60 分钟 | 5-10 分钟 | 30 秒 |
-| 准确性 | 依赖经验 | 预设规则 | 动态诊断 + 自动修复 |
-| 覆盖率 | 全靠人 | 固定场景 | 90%+ 常见场景 |
-| 验证 | 手动逐步 | 脚本固定 | 逐级验证 + 报告 |
+| 能力 | 现状 |
+|---|---|
+| `netsh interface ipv6 show global` 状态检查 / `set global disabled=false` | 未实现 |
+| 接口地址 DHCPv6 重取（`set address ... dhcp`） | 未实现 |
+| MTU 检查与修正（`set subinterfaces mtu=`） | 未实现 |
+| 防火墙 ICMPv6 规则增删（`advfirewall firewall add rule`） | 未实现 |
+| `netsh interface ipv6 reset` | 未实现（破坏性操作，刻意不做） |
+| TCP 层连通性测试（`testTCP`） | 未实现 |
+| HTTP 层验证 | 未实现（由 Stub 的 `/api/health` 探测间接覆盖） |
+| 修复前后状态留痕 / 回滚 | 未实现（只写日志） |
+
+`docs/ipv6-repair.md` 里的诊断命令仍然有效，但那是**人工排查手册**，
+不是本模块的自动化行为。
+
+## 失败可见性
+
+`RunCmd` 会把命令原文、退出码与成功/失败判定写进 `client.log`；
+`SetupIPv6Routes` / `SetupIPv6DNS` 的每一步都有 `=== ... start/done ===` 标记。
+2026-10-07 起，`RunCmd` 的命令行缓冲改为按需分配（原来 `wcscpy_s` 到固定 4096
+缓冲，超长命令会触发无效参数处理器直接终止进程）。
+
+需要人工复核时：`client.log` 里按 `NetFix` 过滤即可看到每条 netsh 的退出码。

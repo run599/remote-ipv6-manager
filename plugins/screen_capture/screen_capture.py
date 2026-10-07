@@ -12,6 +12,8 @@ import sys, json, ctypes, ctypes.wintypes, base64, struct, os
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 
+MAX_B64_CHARS = 32 * 1024 * 1024  # base64 上限（约 24MB 原始 BMP），防止单次响应撑爆管道
+
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
 BI_RGB = 0
@@ -152,12 +154,27 @@ def handle_request(req):
         arguments = params.get("arguments", {})
 
         if tool_name == "screenshot":
-            scale = arguments.get("scale", 2)
+            try:
+                scale = int(arguments.get("scale", 2))
+            except (TypeError, ValueError):
+                scale = 2
+            if scale not in (1, 2, 4):
+                return {"content": [{"type": "text", "text": "scale 只支持 1/2/4"}]}
             try:
                 img_data, fmt = capture_screen(scale=scale)
                 b64 = base64.b64encode(img_data).decode("ascii")
+                if len(b64) > MAX_B64_CHARS:
+                    return {"content": [{"type": "text", "text": (
+                        f"截屏过大（{len(b64) // 1024}KB base64，上限 {MAX_B64_CHARS // 1024}KB）："
+                        f"请改用 scale=4 重试")}]}
                 log(f"截屏: {len(img_data)//1024}KB {fmt} → {len(b64)//1024}KB b64 (scale={scale})")
-                return {"content": [{"type": "text", "text": f"[BMP base64]{b64}"}]}
+                # 同时给出结构化字段（字段优先，避免调用方对文本做子串搜索）与兼容标记
+                return {
+                    "content": [{"type": "text", "text": f"[BMP base64]{b64}"}],
+                    "image_base64": b64,
+                    "image_format": fmt,
+                    "bytes": len(img_data),
+                }
             except Exception as e:
                 return {"content": [{"type": "text", "text": f"截屏失败: {e}"}]}
 
@@ -178,6 +195,11 @@ def handle_request(req):
     return {"error": f"unknown method: {method}"}
 
 
+def _send(obj):
+    # stdout 是 JSON-RPC 通道：这里只允许出现单个 JSON（每行一个消息）
+    print(json.dumps(obj, ensure_ascii=False), flush=True)
+
+
 def main():
     log("screen_capture MCP server 启动")
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -187,14 +209,39 @@ def main():
             continue
         try:
             req = json.loads(line)
-            resp = handle_request(req)
-            resp["jsonrpc"] = "2.0"
-            resp["id"] = req.get("id")
-            print(json.dumps(resp, ensure_ascii=False), flush=True)
-        except json.JSONDecodeError:
-            print(json.dumps({"jsonrpc": "2.0", "error": "invalid json"}), flush=True)
+        except json.JSONDecodeError as e:
+            _send({"jsonrpc": "2.0", "id": None,
+                   "error": {"code": -32700, "message": "parse error: %s" % e}})
+            continue
+
+        rid = req.get("id")
+
+        # 优雅退出：先回执再退出，客户端不需要再 TerminateProcess
+        if req.get("method") == "shutdown":
+            if rid is not None:
+                _send({"jsonrpc": "2.0", "id": rid, "result": {"ok": True, "bye": True}})
+            log("收到 shutdown，正常退出")
+            return
+
+        err_obj = None
+        try:
+            payload = handle_request(req)
         except Exception as e:
-            print(json.dumps({"jsonrpc": "2.0", "error": str(e)}), flush=True)
+            payload = None
+            err_obj = {"code": -32603, "message": "%s: %s" % (type(e).__name__, e)}
+
+        if rid is None:
+            # JSON-RPC 通知：执行但不回应（原实现会回一条无 id 的消息，污染通道）
+            continue
+
+        if payload is None:
+            _send({"jsonrpc": "2.0", "id": rid, "error": err_obj})
+        elif isinstance(payload, dict) and set(payload.keys()) == {"error"}:
+            _send({"jsonrpc": "2.0", "id": rid,
+                   "error": {"code": -32601, "message": str(payload["error"])}})
+        else:
+            # 关键词：工具结果必须包在 result 里，否则标准 MCP 客户端会解析失败
+            _send({"jsonrpc": "2.0", "id": rid, "result": payload})
 
 
 if __name__ == "__main__":
