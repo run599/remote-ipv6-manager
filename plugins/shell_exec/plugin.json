@@ -1,0 +1,7 @@
+{
+  "id": "shell_exec",
+  "name": "远程 Shell",
+  "version": "1.0.0",
+  "command": "python shell_exec.py",
+  "description": "执行系统命令并返回输出"
+}

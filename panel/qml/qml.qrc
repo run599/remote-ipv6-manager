@@ -1,0 +1,19 @@
+<RCC>
+    <!-- 资源路径 = prefix + 条目名。C++ 侧必须加载 qrc:/RMMPanel/main.qml，
+         且 qmldir 也要进资源，Theme 的 singleton 声明才生效。 -->
+    <qresource prefix="/ui">
+        <file>qmldir</file>
+        <file>main.qml</file>
+        <file>Theme.qml</file>
+        <file>LoginPage.qml</file>
+        <file>MainPage.qml</file>
+        <file>AgentList.qml</file>
+        <file>ShellTab.qml</file>
+        <file>FileTab.qml</file>
+        <file>ScreenTab.qml</file>
+        <file>PluginsTab.qml</file>
+        <file>PoliciesTab.qml</file>
+        <file>DeployTab.qml</file>
+        <file>QueueTab.qml</file>
+</qresource>
+</RCC>

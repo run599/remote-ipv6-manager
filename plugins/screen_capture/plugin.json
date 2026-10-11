@@ -1,0 +1,7 @@
+{
+  "id": "screen_capture",
+  "name": "截屏",
+  "version": "1.0.0",
+  "command": "python screen_capture.py",
+  "description": "截取屏幕截图并返回 base64 编码的 BMP"
+}

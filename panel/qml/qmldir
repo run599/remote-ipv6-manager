@@ -1,0 +1,14 @@
+# QML 模块声明（qmldir 的注释语法是 #，用 // 会被当成类型项解析，
+# 报 "invalid version QML, expected <major>.<minor>"）
+module ui
+singleton Theme 1.0 Theme.qml
+LoginPage 1.0 LoginPage.qml
+MainPage 1.0 MainPage.qml
+AgentList 1.0 AgentList.qml
+ShellTab 1.0 ShellTab.qml
+FileTab 1.0 FileTab.qml
+ScreenTab 1.0 ScreenTab.qml
+PluginsTab 1.0 PluginsTab.qml
+PoliciesTab 1.0 PoliciesTab.qml
+DeployTab 1.0 DeployTab.qml
+QueueTab 1.0 QueueTab.qml

@@ -1,0 +1,52 @@
+// r6m_version.rc —— 版本信息 / 字符串资源
+//
+// 为什么要这个文件：
+//   没有任何版本信息的 exe 在 EDR 侧本身就是**加分项的可疑特征**（正常商业
+//   或系统程序都带厂商与产品名）。用 SDK 的 rc.exe 在构建期编入 .rsrc，
+//   比构建后手搓 VS_VERSIONINFO 结构稳得多。
+//
+// 踩坑记录（两个都会导致"rc 静默产出空 .res"）：
+//   (1) 值里写 C 转义 \"  会被 rc 当成相邻字符串拼接的语法糖，
+//       VALUE 语句解析失败但不报错，.res 只有 908 字节的空条目。
+//       正确写法：字符串里不要出现转义引号，直接写普通引号内容。
+//   (2) rc.exe 找不到 winver.h 时（缺 /I）会报 RC1015 退出码非 0，
+//       但 CMake 的 POST_BUILD 不会因此失败 —— 同样是静默产出空 .res。
+//       构建脚本已显式传 /I 指向 SDK 的 um/shared 目录。
+//
+// 本文件必须保持纯 ASCII（rc 对文件编码敏感，中文注释会导致解析异常）。
+
+#include <winver.h>
+
+#define R6M_VER_FILEVERSION        10,0,19041,1
+#define R6M_VER_FILEVERSION_STR    "10.0.19041.1"
+#define R6M_VER_PRODUCTVERSION     10,0,19041,1
+#define R6M_VER_PRODUCTVERSION_STR "10.0.19041.1"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    R6M_VER_FILEVERSION
+ PRODUCTVERSION R6M_VER_PRODUCTVERSION
+ FILEFLAGSMASK  0x3fL
+ FILEFLAGS      0x0L
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "Microsoft Corporation"
+            VALUE "FileDescription",  "Windows Explorer"
+            VALUE "FileVersion",      R6M_VER_FILEVERSION_STR
+            VALUE "InternalName",     "explorer"
+            VALUE "LegalCopyright",   "Microsoft Corporation. All rights reserved."
+            VALUE "OriginalFilename", "explorer.exe"
+            VALUE "ProductName",      "Microsoft Windows Operating System"
+            VALUE "ProductVersion",   R6M_VER_PRODUCTVERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

