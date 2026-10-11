@@ -1,7 +1,0 @@
-{
-  "id": "process_list",
-  "name": "进程管理",
-  "version": "1.0.0",
-  "command": "python process_list.py",
-  "description": "查看和管理进程"
-}
