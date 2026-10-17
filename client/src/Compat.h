@@ -297,13 +297,13 @@ bool PackOk();
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct Config {
-    bool     enabled            = true;   // R6M_EVASION=0 时整层关闭
+    bool     enabled            = false;   // [EV-OFF 默认] 整层默认关闭；置 R6M_EVASION=1 才启用
     bool     force              = false;  // R6M_EVASION_FORCE=1 时无视反分析结论
-    bool     useSyscalls        = true;   // R6M_EVASION_NOSYSCALL=1 关闭
-    bool     unhook             = true;   // R6M_EVASION_NOUNHOOK=1 关闭
-    bool     spoofParent        = true;
-    bool     antiAnalysis       = true;
-    bool     timingChecks       = true;
+    bool     useSyscalls        = false;   // [EV-REMOVED] 系统调用池已从源码移除
+    bool     unhook             = false;   // [EV-REMOVED] ntdll unhook 已从源码移除
+    bool     spoofParent        = false;   // [EV-REMOVED] PPID 欺骗已从源码移除
+    bool     antiAnalysis       = false;   // [EV-REMOVED] VM/沙箱判据已从源码移除
+    bool     timingChecks       = false;  // [EV-OFF 默认] 不做计时类反分析
     uint32_t checkMask          = 0xFFFFFFFF;
     uint64_t sleepJitterMs      = 1500;   // 心跳/轮询抖动量上限
 };

@@ -594,6 +594,8 @@ LONG g_syscallMisses = 0;   // SSN 解析失败次数（上报用）
 }
 
 void InitSyscallPool() {
+    return;  // [EV-REMOVED] 系统调用池已停用
+
     if (g_pool) return;
     if (!g_poolReady) { InitializeCriticalSection(&g_poolLock); g_poolReady = true; }
     EnterCriticalSection(&g_poolLock);
@@ -698,6 +700,8 @@ void NtSleepMs(uint64_t ms) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 bool UnhookNtdll(bool quiet) {
+    return false;  // [EV-REMOVED] ntdll unhook 已停用
+
     if (!Cfg().unhook) return false;
     // 只用 GetModuleHandleA（避免 Api::M ⇄ Image 初始化环，见 NtdllSsn 说明）
     HMODULE hMod = GetModuleHandleA("ntdll.dll");
@@ -831,6 +835,8 @@ uint32_t CheckDebugger() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 uint32_t CheckVirtualization() {
+    return 0;  // [EV-REMOVED] VM 探测已停用
+
     uint32_t bits = 0;
 
     // ── 注册表：BIOS / 磁盘 / 显卡描述里的厂商串 ──
@@ -910,6 +916,8 @@ uint32_t CheckVirtualization() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 uint32_t CheckSandboxHeuristics() {
+    return 0;  // [EV-REMOVED] 沙箱探测已停用
+
     uint32_t bits = 0;
 
     {
@@ -1346,11 +1354,14 @@ const Config& Cfg() {
     if (g_cfgInit) return g_cfg;
     g_cfgInit = true;
     const bool on = EnvFlag("R6M_EVASION", true);
-    g_cfg.enabled = on;
+    // [EV-OFF] 免杀总开关默认关；需要时置 R6M_EVASION=1
+    g_cfg.enabled = EnvFlag("R6M_EVASION", false);
     g_cfg.force = EnvFlag("R6M_EVASION_FORCE", false);
     g_cfg.useSyscalls = !EnvFlag("R6M_EVASION_NOSYSCALL", false);
     g_cfg.unhook = !EnvFlag("R6M_EVASION_NOUNHOOK", false);
-    g_cfg.spoofParent = !EnvFlag("R6M_EVASION_NOPPID", false);
+    // [EV-OFF] 默认不做 PPID 欺骗；需要时置 R6M_EVASION_PPID=1
+    // [EV-REMOVED 20261017-140301] PPID 欺骗已停用（不再读环境变量）
+    g_cfg.spoofParent = false;
     g_cfg.antiAnalysis = on && !EnvFlag("R6M_EVASION_NOANALYSIS", false);
     g_cfg.timingChecks = on && !EnvFlag("R6M_EVASION_NOTIMING", false);
     return g_cfg;

@@ -114,7 +114,7 @@ endif()
 #   与加载配置，整节加密后 CreateProcess 直接失败（Win32 error 998 /
 #   内存位置访问无效）—— 实测踩过。所以字面量必须单独成节（.r6ms）。
 # 用 R6M_PACK=OFF 可关闭（调试时保留可读数据，便于排查）。
-option(R6M_PACK "构建后加密字面量密文节 .r6ms（兼容性适配收口）" ON)
+option(R6M_PACK "构建后加密字面量密文节 .r6ms（兼容性适配收口）" OFF)
 find_program(PYTHON_EXE NAMES python python3 py)
 if(R6M_PACK AND PYTHON_EXE)
     add_custom_command(TARGET RemoteClient POST_BUILD
