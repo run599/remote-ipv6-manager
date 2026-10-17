@@ -34,8 +34,8 @@ static const CriticalApi* CriticalApis(size_t& count) {
     static CriticalApi tbl[8];
     static size_t n = 0;
     if (n == 0) {
-        tbl[0] = { R6M_STR_263D7A4A24997D69, R6M_STR_4298DRMMD09F85768 };
-        tbl[1] = { R6M_STR_4DAA853C34665041, R6M_STR_4298DRMMD09F85768 };
+        tbl[0] = { R6M_STR_263D7A4A24997D69, R6M_STR_4298DC2D09F85768 };
+        tbl[1] = { R6M_STR_4DAA853C34665041, R6M_STR_4298DC2D09F85768 };
         tbl[2] = { R6M_STR_6F4E79C87F04F3E6, R6M_STR_32EACF116EB05411 };  // InternetReadFile@wininet.dll
         tbl[3] = { R6M_STR_76B6FA9B2B832D63, R6M_STR_32EACF116EB05411 };  // HttpSendRequestA@wininet.dll
         tbl[4] = { R6M_STR_2E97865AB85128C3, R6M_STR_E14B18A7ACF9C443 };

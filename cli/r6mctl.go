@@ -93,7 +93,7 @@ func newCtx() *Ctx {
 		}
 	}
 	return &Ctx{
-		URL:     strings.TrimRight(envOr("R6M_URL", "https://192.168.1.10:8443"), "/"),
+		URL:     strings.TrimRight(envOr("R6M_URL", "https://127.0.0.1:8443"), "/"),
 		User:    envOr("R6M_USER", "admin"),
 		Pass:    os.Getenv("R6M_PASS"),
 		Verify:  os.Getenv("R6M_VERIFY_TLS") == "1",
@@ -1090,7 +1090,7 @@ func usage() {
 用法: r6mctl [全局选项] <命令> [参数]
 
 全局选项:
-  --url <URL>      服务端地址（或环境变量 R6M_URL，默认 ` + envOr("R6M_URL", "https://192.168.1.10:8443") + `）
+  --url <URL>      服务端地址（或环境变量 R6M_URL，默认 ` + envOr("R6M_URL", "https://127.0.0.1:8443") + `）
   --user <USER>    登录用户（或 R6M_USER，默认 admin）
   --pass <PASS>    登录口令（或 R6M_PASS；不填则用已缓存会话）
   --wait <秒>      mcp call 等待结果上限（默认 60）

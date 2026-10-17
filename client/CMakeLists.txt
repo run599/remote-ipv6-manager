@@ -63,7 +63,7 @@ add_executable(RemoteClient WIN32
     src/NetworkFix.cpp
     src/SelfGuard.cpp    # 进程保护（常驻互检）
     src/ArtifactApply.cpp # 工件落地后的应用分发（备份/回滚）
-    src/IntegrityCheck.cpp
+    src/AntiHook.cpp      
     src/Compat.cpp
 )
 

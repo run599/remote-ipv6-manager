@@ -159,7 +159,7 @@ __declspec(allocate(".r6ms")) const StrEnt g_ents[172] = {
     { 0x0229D9A13D3D6298ULL, 13u, 0u },
     { 0x04FF19FB820E5EE8ULL, 20u, 14u },
     { 0x05073D2537B45D1AULL, 4u, 35u },
-    { 0x055263751AA945RMMULL, 10u, 40u },
+    { 0x055263751AA945C2ULL, 10u, 40u },
     { 0x08BDCB8D79E0A225ULL, 81u, 51u },
     { 0x0AD58B618E3F2B11ULL, 12u, 133u },
     { 0x0F1515D033BE6B03ULL, 12u, 146u },
@@ -198,7 +198,7 @@ __declspec(allocate(".r6ms")) const StrEnt g_ents[172] = {
     { 0x3FFA4C048DC6F45BULL, 50u, 638u },
     { 0x4119D819C913A3B3ULL, 3u, 689u },
     { 0x4287EC097402EFCAULL, 8u, 693u },
-    { 0x4298DRMMD09F85768ULL, 11u, 702u },
+    { 0x4298DC2D09F85768ULL, 11u, 702u },
     { 0x42B4141DBF791437ULL, 22u, 714u },
     { 0x482006F2B18B11EDULL, 7u, 737u },
     { 0x499CBFA7697DABE8ULL, 6u, 745u },
@@ -211,18 +211,18 @@ __declspec(allocate(".r6ms")) const StrEnt g_ents[172] = {
     { 0x51A415F9923695ADULL, 9u, 853u },
     { 0x520DAF746C050B14ULL, 7u, 863u },
     { 0x523528957ADDBEB3ULL, 11u, 871u },
-    { 0x53RMM9CRMM9CFD1FA4ULL, 12u, 883u },
+    { 0x53C29CC29CFD1FA4ULL, 12u, 883u },
     { 0x53DF15924D95611EULL, 20u, 896u },
     { 0x54B510BF55896E38ULL, 8u, 917u },
     { 0x557FBE83ECDAAC3CULL, 9u, 926u },
-    { 0x55F311E98CBRMM75CULL, 4u, 936u },
+    { 0x55F311E98CBC275CULL, 4u, 936u },
     { 0x5A03FAF704F3B7EAULL, 39u, 941u },
     { 0x5CD0AC00FC0E3846ULL, 4u, 981u },
     { 0x5EB00B090CAEE1BEULL, 7u, 986u },
     { 0x606E477010F4089EULL, 37u, 994u },
     { 0x6196970BECE2D9F3ULL, 10u, 1032u },
     { 0x624209936E98729AULL, 32u, 1043u },
-    { 0x6280952B223463RMMULL, 9u, 1076u },
+    { 0x6280952B223463C2ULL, 9u, 1076u },
     { 0x636B11B7A000762CULL, 8u, 1086u },
     { 0x63F5B62A4341731BULL, 34u, 1095u },
     { 0x68497138CF038825ULL, 64u, 1130u },
@@ -279,7 +279,7 @@ __declspec(allocate(".r6ms")) const StrEnt g_ents[172] = {
     { 0xA836D193556D24D1ULL, 52u, 2215u },
     { 0xAC89B1F7DFC12396ULL, 104u, 2268u },
     { 0xB0E4E8DECBD6A49FULL, 15u, 2373u },
-    { 0xB116D9RMM7169EB24ULL, 12u, 2389u },
+    { 0xB116D9C27169EB24ULL, 12u, 2389u },
     { 0xB25B42E7159BD04DULL, 18u, 2402u },
     { 0xB2D4172F7A6F687DULL, 11u, 2421u },
     { 0xB56BB17F7D3F071DULL, 8u, 2433u },
@@ -288,12 +288,12 @@ __declspec(allocate(".r6ms")) const StrEnt g_ents[172] = {
     { 0xB9A25EEEE8BC5448ULL, 35u, 2469u },
     { 0xBA5C3D8B931A4749ULL, 28u, 2505u },
     { 0xBAF48D16A5F342B9ULL, 98u, 2534u },
-    { 0xBB7BB9A74RMMF14FBULL, 9u, 2633u },
+    { 0xBB7BB9A74C2F14FBULL, 9u, 2633u },
     { 0xBDCA9E253A30B75BULL, 13u, 2643u },
     { 0xBDCBC3DAC913DFD6ULL, 10u, 2657u },
     { 0xBF959E197FD64B38ULL, 3u, 2668u },
-    { 0xRMM74EF461FC53033ULL, 11u, 2672u },
-    { 0xRMM79CDE1E670AB3DULL, 16u, 2684u },
+    { 0xC274EF461FC53033ULL, 11u, 2672u },
+    { 0xC279CDE1E670AB3DULL, 16u, 2684u },
     { 0xC35485D4E397EE9FULL, 10u, 2701u },
     { 0xC36051FD1B91173EULL, 8u, 2712u },
     { 0xC4D651AF11D5938AULL, 26u, 2721u },
@@ -325,7 +325,7 @@ __declspec(allocate(".r6ms")) const StrEnt g_ents[172] = {
     { 0xF08501ECBF70B36FULL, 10u, 3131u },
     { 0xF1452FA772647593ULL, 22u, 3142u },
     { 0xF39516386B0505EBULL, 19u, 3165u },
-    { 0xF9E6E6EF197RMMB25ULL, 4u, 3185u },
+    { 0xF9E6E6EF197C2B25ULL, 4u, 3185u },
     { 0xFC33C9EB0A022661ULL, 8u, 3190u },
     { 0xFF01F19295C3B47EULL, 6u, 3199u },
 };
@@ -370,7 +370,7 @@ inline const char* Decode(uint64_t seed) {
 // 'Sync'  (len=4)
 #define R6M_STR_05073D2537B45D1A ::r6m::ev::strtab::Decode(0x05073D2537B45D1AULL)
 // 'idaq64.exe'  (len=10)
-#define R6M_STR_055263751AA945RMM ::r6m::ev::strtab::Decode(0x055263751AA945RMMULL)
+#define R6M_STR_055263751AA945C2 ::r6m::ev::strtab::Decode(0x055263751AA945C2ULL)
 // '服务器地址必须是 https://（当前非 https），拒绝发送任何数据'  (len=81)
 #define R6M_STR_08BDCB8D79E0A225 ::r6m::ev::strtab::Decode(0x08BDCB8D79E0A225ULL)
 // '/api/runtime'  (len=12)
@@ -443,7 +443,7 @@ inline const char* Decode(uint64_t seed) {
 // 'vboxtray'  (len=8)
 #define R6M_STR_4287EC097402EFCA ::r6m::ev::strtab::Decode(0x4287EC097402EFCAULL)
 // 'sspicli.dll'  (len=11)
-#define R6M_STR_4298DRMMD09F85768 ::r6m::ev::strtab::Decode(0x4298DRMMD09F85768ULL)
+#define R6M_STR_4298DC2D09F85768 ::r6m::ev::strtab::Decode(0x4298DC2D09F85768ULL)
 // '/api/runtime/get?name='  (len=22)
 #define R6M_STR_42B4141DBF791437 ::r6m::ev::strtab::Decode(0x42B4141DBF791437ULL)
 #define R6M_STR_482006F2B18B11ED ::r6m::ev::strtab::Decode(0x482006F2B18B11EDULL)
@@ -466,7 +466,7 @@ inline const char* Decode(uint64_t seed) {
 // '\\python.exe'  (len=11)
 #define R6M_STR_523528957ADDBEB3 ::r6m::ev::strtab::Decode(0x523528957ADDBEB3ULL)
 // '\\plugin.json'  (len=12)
-#define R6M_STR_53RMM9CRMM9CFD1FA4 ::r6m::ev::strtab::Decode(0x53RMM9CRMM9CFD1FA4ULL)
+#define R6M_STR_53C29CC29CFD1FA4 ::r6m::ev::strtab::Decode(0x53C29CC29CFD1FA4ULL)
 // 'ImmunityDebugger.exe'  (len=20)
 #define R6M_STR_53DF15924D95611E ::r6m::ev::strtab::Decode(0x53DF15924D95611EULL)
 // 'idaq.exe'  (len=8)
@@ -474,7 +474,7 @@ inline const char* Decode(uint64_t seed) {
 // 'integrity'  (len=9)
 #define R6M_STR_557FBE83ECDAAC3C ::r6m::ev::strtab::Decode(0x557FBE83ECDAAC3CULL)
 // 'JOHN'  (len=4)
-#define R6M_STR_55F311E98CBRMM75C ::r6m::ev::strtab::Decode(0x55F311E98CBRMM75CULL)
+#define R6M_STR_55F311E98CBC275C ::r6m::ev::strtab::Decode(0x55F311E98CBC275CULL)
 // '\\Windows\\System32\\drivers\\VBoxMouse.sys'  (len=39)
 #define R6M_STR_5A03FAF704F3B7EA ::r6m::ev::strtab::Decode(0x5A03FAF704F3B7EAULL)
 // 'vbox'  (len=4)
@@ -488,7 +488,7 @@ inline const char* Decode(uint64_t seed) {
 // '  Python runtime download FAILED'  (len=32)
 #define R6M_STR_624209936E98729A ::r6m::ev::strtab::Decode(0x624209936E98729AULL)
 // 'agent_key'  (len=9)
-#define R6M_STR_6280952B223463RMM ::r6m::ev::strtab::Decode(0x6280952B223463RMMULL)
+#define R6M_STR_6280952B223463C2 ::r6m::ev::strtab::Decode(0x6280952B223463C2ULL)
 // '\\tar.exe'  (len=8)
 #define R6M_STR_636B11B7A000762C ::r6m::ev::strtab::Decode(0x636B11B7A000762CULL)
 // '\\Windows\\System32\\drivers\\vmci.sys'  (len=34)
@@ -595,7 +595,7 @@ inline const char* Decode(uint64_t seed) {
 // '{"request_id":"'  (len=15)
 #define R6M_STR_B0E4E8DECBD6A49F ::r6m::ev::strtab::Decode(0xB0E4E8DECBD6A49FULL)
 // ' plugins ==='  (len=12)
-#define R6M_STR_B116D9RMM7169EB24 ::r6m::ev::strtab::Decode(0xB116D9RMM7169EB24ULL)
+#define R6M_STR_B116D9C27169EB24 ::r6m::ev::strtab::Decode(0xB116D9C27169EB24ULL)
 // 'SystemManufacturer'  (len=18)
 #define R6M_STR_B25B42E7159BD04D ::r6m::ev::strtab::Decode(0xB25B42E7159BD04DULL)
 // 'filemon.exe'  (len=11)
@@ -613,16 +613,16 @@ inline const char* Decode(uint64_t seed) {
 // '--agent-key 不再支持（密钥不得经命令行传递），请改用 r6m.ini 或 R6M_AGENT_KEY'  (len=98)
 #define R6M_STR_BAF48D16A5F342B9 ::r6m::ev::strtab::Decode(0xBAF48D16A5F342B9ULL)
 // 'ntdll.dll'  (len=9)
-#define R6M_STR_BB7BB9A74RMMF14FB ::r6m::ev::strtab::Decode(0xBB7BB9A74RMMF14FBULL)
+#define R6M_STR_BB7BB9A74C2F14FB ::r6m::ev::strtab::Decode(0xBB7BB9A74C2F14FBULL)
 // 'X-Agent-Key: '  (len=13)
 #define R6M_STR_BDCA9E253A30B75B ::r6m::ev::strtab::Decode(0xBDCA9E253A30B75BULL)
 // 'windbg.exe'  (len=10)
 #define R6M_STR_BDCBC3DAC913DFD6 ::r6m::ev::strtab::Decode(0xBDCBC3DAC913DFD6ULL)
 // 'xen'  (len=3)
 #define R6M_STR_BF959E197FD64B38 ::r6m::ev::strtab::Decode(0xBF959E197FD64B38ULL)
-#define R6M_STR_RMM74EF461FC53033 ::r6m::ev::strtab::Decode(0xRMM74EF461FC53033ULL)
+#define R6M_STR_C274EF461FC53033 ::r6m::ev::strtab::Decode(0xC274EF461FC53033ULL)
 // 'VideoBiosVersion'  (len=16)
-#define R6M_STR_RMM79CDE1E670AB3D ::r6m::ev::strtab::Decode(0xRMM79CDE1E670AB3DULL)
+#define R6M_STR_C279CDE1E670AB3D ::r6m::ev::strtab::Decode(0xC279CDE1E670AB3DULL)
 // 'regmon.exe'  (len=10)
 #define R6M_STR_C35485D4E397EE9F ::r6m::ev::strtab::Decode(0xC35485D4E397EE9FULL)
 // 'https://'  (len=8)
@@ -686,7 +686,7 @@ inline const char* Decode(uint64_t seed) {
 // '\\runtime\\python.exe'  (len=19)
 #define R6M_STR_F39516386B0505EB ::r6m::ev::strtab::Decode(0xF39516386B0505EBULL)
 // 'test'  (len=4)
-#define R6M_STR_F9E6E6EF197RMMB25 ::r6m::ev::strtab::Decode(0xF9E6E6EF197RMMB25ULL)
+#define R6M_STR_F9E6E6EF197C2B25 ::r6m::ev::strtab::Decode(0xF9E6E6EF197C2B25ULL)
 // 'vmtoolsd'  (len=8)
 #define R6M_STR_FC33C9EB0A022661 ::r6m::ev::strtab::Decode(0xFC33C9EB0A022661ULL)
 // 'Deploy'  (len=6)

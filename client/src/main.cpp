@@ -12,6 +12,7 @@
 
 // 兼容性适配：UAC 提升权限用的 ShellExecuteExW 改走动态解析（shell32 不再静态导入）
 #include "Compat.h"
+#include "SelfGuard.h"   // [DSH] 快照缺此行：main 用到 r6m::SelfGuard 但未包含其头
 #define ShellExecuteExW ::EvShellExecuteExW
 
 // 检查是否以管理员权限运行

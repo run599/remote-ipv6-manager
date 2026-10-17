@@ -440,7 +440,7 @@ StubCore::StubCore() {
                     } else {
                         LOG_E(R6M_STR_D9CF61251F402ED5, "r6m.ini 的 cert_pin 不是 64 位 hex，已忽略");
                     }
-                } else if (key == R6M_STR_6280952B223463RMM && !hasAgentKey() && !val.empty()) {
+                } else if (key == R6M_STR_6280952B223463C2 && !hasAgentKey() && !val.empty()) {
                     setAgentKeyPlain(val.c_str());
                     SecureZeroMemory(&val[0], val.size());
                     LOG_I(R6M_STR_D9CF61251F402ED5, R6M_STR_606E477010F4089E);
@@ -902,7 +902,7 @@ bool StubCore::connectToServer() {
         r6m::Json j;
         std::string err;
         if (r6m::Json::parse(resp, j, &err)) {
-            if (j.getString(R6M_STR_6280952B223463RMM).empty() && hasBootstrapKey() && !_bootstrapKeyObf.empty()) {
+            if (j.getString(R6M_STR_6280952B223463C2).empty() && hasBootstrapKey() && !_bootstrapKeyObf.empty()) {
                 if (_agentKeyObf != _bootstrapKeyObf) {
                     LOG_W(R6M_STR_D9CF61251F402ED5, "服务端拒绝了当前密钥，回退引导密钥重新登记");
                     std::string plain;   // 把引导密钥解码到栈上，用完即擦
@@ -926,7 +926,7 @@ bool StubCore::connectToServer() {
         LOG_E(R6M_STR_D9CF61251F402ED5, ("注册响应不是合法 JSON: " + err).c_str());
         return false;
     }
-    std::string newKey = j.getString(R6M_STR_6280952B223463RMM);
+    std::string newKey = j.getString(R6M_STR_6280952B223463C2);
     if (newKey.empty()) {
         LOG_E(R6M_STR_D9CF61251F402ED5, (R6M_STR_2A1B3A5DBE21E369 + resp.substr(0, 160)).c_str());
         return false;
@@ -2566,6 +2566,7 @@ void StubCore::ConvergeDesired(const std::string& desiredJson) {
         const std::string name = it.getString("file_name");
         if (name.empty()) continue;
         const std::string wantSha = it.getString("sha256");
+        const std::string wantRun = it.getString("run_id");
 
         bool need = true;
         if (lItems && lItems->isObject()) {
@@ -2574,6 +2575,9 @@ void StubCore::ConvergeDesired(const std::string& desiredJson) {
                 const std::string haveSha = have->getString("sha256");
                 // 期望没给标识时，以"本地已记录该件"为达成
                 if (wantSha.empty() ? !haveSha.empty() : (haveSha == wantSha)) need = false;
+                const std::string haveRun = have->getString("run_id");
+                // [DSH] run_id：内容相同但要求"再执行一次"时必须重跑（命令式语义）
+                if (!wantRun.empty() && haveRun != wantRun) need = true;
             }
         }
         if (!need) {
@@ -2606,6 +2610,7 @@ void StubCore::ConvergeDesired(const std::string& desiredJson) {
             }
         }
         rec.set("sha256", r6m::Json::makeString(localSha));
+            if (!wantRun.empty()) rec.set("run_id", r6m::Json::makeString(wantRun));
             rec.set("applied_ms", r6m::Json::makeNumber((double)GetTickCount64()));
             newItems.set(name, rec);
         } else {
@@ -3099,7 +3104,7 @@ void StubCore::syncPlugins(const std::wstring& pluginDir) {
 
     LOG_I(R6M_STR_05073D2537B45D1A, ("=== syncPlugins done, 需同步插件=" + std::to_string(downloaded) +
           " files=" + std::to_string(filesWritten) + " failed=" + std::to_string(filesFailed) +
-          R6M_STR_B116D9RMM7169EB24).c_str());
+          R6M_STR_B116D9C27169EB24).c_str());
 
     // 同步完必须重扫一次：插件进程是按需启动的，不重扫则工具映射仍是空的，
     // 面板第一次调用工具会得到 "no plugin provides tool"。
