@@ -1,0 +1,136 @@
+【一键锁死下发清单】
+
+① 显式 values（55）
+  activity_history_off             = 0    禁用活动历史上报
+  advertising_id_off               = 0    禁用广告 ID
+  app_telemetry_off                = 0    禁用应用兼容遥测
+  audit_cmdline_on                 = 1    进程创建审计包含命令行
+  autorun_off                      = 255  禁用所有驱动器自动播放
+  blank_pw_console_only            = 1    空密码账户仅限控制台登录
+  bluetooth_off                    = 4    禁用蓝牙支持服务
+  cmd_off                          = 1    禁用命令提示符
+  controlpanel_off                 = 1    禁用控制面板
+  cortana_off                      = 0    禁用 Cortana
+  defer_quality_updates            = 30   推迟质量更新（天）
+  disable_domain_creds             = 1    禁用凭据委派（DisableDomainCreds）
+  elev_std_user_auto_deny          = 1    标准用户提升权限方式（0=直接拒绝 / 1=要凭据 / 3=要凭据·非安全桌面）
+  everyone_anon_off                = 0    匿名不含 Everyone 组
+  feedback_off                     = 0    禁用反馈请求
+  hide_desktop_pc                  = 1    桌面隐藏「此电脑」图标
+  hide_desktop_user                = 1    桌面隐藏「用户文件夹」图标
+  icons_only_no_thumbnails         = 1    只显示图标（不生成缩略图）
+  input_personalization_off        = 0    禁用输入个性化收集
+  llmnr_off                        = 0    禁用 LLMNR
+  lm_compat_level                  = 4    LAN Manager 认证级别
+  lock_idle_secs                   = 600  屏幕锁定空闲超时（秒）
+  lockscreen_spotlight_off         = 0    禁用屏幕锁定 Spotlight 推广
+  logon_no_switch_user             = 1    登录界面隐藏“切换用户”
+  lsa_ppl_on                       = 1    开启 LSA 保护（RunAsPPL）
+  no_connected_user                = 3    禁止微软账户登录（NoConnectedUser=3）
+  no_context_menu                  = 1    禁用右键菜单（资源管理器）
+  no_logoff                        = 1    禁用注销
+  no_reboot_with_users             = 1    有人登录时不自动重启
+  no_set_folders                   = 1    禁止更改文件夹选项
+  no_set_taskbar                   = 1    禁止更改任务栏与开始菜单设置
+  no_tray_context_menu             = 1    禁用托盘右键菜单
+  onedrive_sync_off                = 1    禁止 OneDrive 个人同步
+  ps_module_log_on                 = 1    开启 PowerShell 模块日志
+  ps_scriptblock_log_on            = 1    开启 PowerShell 脚本块日志
+  ps_transcript_on                 = 1    开启 PowerShell 转录
+  rdp_off                          = 1    禁用远程桌面
+  recent_docs_off                  = 0    关闭“最近使用的文档”记录
+  regedit_off                      = 1    禁用注册表编辑器
+  remote_assist_off                = 0    禁用远程协助
+  remote_registry_off              = 4    禁用远程注册表服务
+  restrict_anonymous               = 1    限制匿名枚举
+  run_dialog_off                   = 1    禁用“运行”对话框
+  show_file_ext                    = 0    显示文件扩展名
+  show_hidden_files                = 1    显示隐藏文件
+  shutdown_off                     = 1    隐藏关机按钮
+  smb1_off                         = 0    禁用 SMBv1 服务端
+  spooler_off                      = 4    禁用打印后台服务
+  taskmgr_off                      = 1    禁用任务管理器
+  telemetry_level                  = 0    遥测级别
+  uac_admin_need_cred              = 1    管理员提升权限方式（1=要凭据 / 2=要同意 / 0=直接提升权限）
+  usbstor_off                      = 4    禁用 USB 存储
+  wdigest_off                      = 0    禁用 WDigest 明文缓存
+  wpad_off                         = 0    禁用 WPAD 自动发现
+  wsh_off                          = 0    禁用 Windows 脚本宿主（.vbs/.js）
+
+② 不变式（47）
+  telemetry_level                  遥测级别
+  cortana_off                      禁用 Cortana
+  onedrive_sync_off                禁止 OneDrive 个人同步
+  lockscreen_spotlight_off         禁用屏幕锁定 Spotlight 推广
+  activity_history_off             禁用活动历史上报
+  input_personalization_off        禁用输入个性化收集
+  advertising_id_off               禁用广告 ID
+  feedback_off                     禁用反馈请求
+  app_telemetry_off                禁用应用兼容遥测
+  no_reboot_with_users             有人登录时不自动重启
+  autorun_off                      禁用所有驱动器自动播放
+  remote_assist_off                禁用远程协助
+  show_file_ext                    显示文件扩展名
+  show_hidden_files                显示隐藏文件
+  icons_only_no_thumbnails         只显示图标（不生成缩略图）
+  recent_docs_off                  关闭“最近使用的文档”记录
+  llmnr_off                        禁用 LLMNR
+  smb1_off                         禁用 SMBv1 服务端
+  wpad_off                         禁用 WPAD 自动发现
+  logon_no_switch_user             登录界面隐藏“切换用户”
+  wdigest_off                      禁用 WDigest 明文缓存
+  lsa_ppl_on                       开启 LSA 保护（RunAsPPL）
+  restrict_anonymous               限制匿名枚举
+  everyone_anon_off                匿名不含 Everyone 组
+  lm_compat_level                  LAN Manager 认证级别
+  remote_registry_off              禁用远程注册表服务
+  rdp_off                          禁用远程桌面
+  usbstor_off                      禁用 USB 存储
+  spooler_off                      禁用打印后台服务
+  bluetooth_off                    禁用蓝牙支持服务
+  uac_admin_need_cred              管理员提升权限方式（1=要凭据 / 2=要同意 / 0=直接提升权限）
+  elev_std_user_auto_deny          标准用户提升权限方式（0=直接拒绝 / 1=要凭据 / 3=要凭据·非安全桌面）
+  blank_pw_console_only            空密码账户仅限控制台登录
+  wsh_off                          禁用 Windows 脚本宿主（.vbs/.js）
+  no_context_menu                  禁用右键菜单（资源管理器）
+  no_tray_context_menu             禁用托盘右键菜单
+  no_logoff                        禁用注销
+  hide_desktop_pc                  桌面隐藏「此电脑」图标
+  hide_desktop_user                桌面隐藏「用户文件夹」图标
+  no_set_taskbar                   禁止更改任务栏与开始菜单设置
+  no_set_folders                   禁止更改文件夹选项
+  disable_domain_creds             禁用凭据委派（DisableDomainCreds）
+  no_connected_user                禁止微软账户登录（NoConnectedUser=3）
+  ps_scriptblock_log_on            开启 PowerShell 脚本块日志
+  ps_module_log_on                 开启 PowerShell 模块日志
+  ps_transcript_on                 开启 PowerShell 转录
+  audit_cmdline_on                 进程创建审计包含命令行
+
+③ 资产（27）
+  admin_mode_off                      关闭兼容模式（删标记 + 降回标准用户）
+  daily_demote                        日常账户恢复为标准用户（堵"更多选项"兼容处理）
+  gate_rotate_arm                     动态密码·布防（专用提升权限账户 + 轮换）
+  desk_pw_off                         桌面密码·关（临时开门结束）
+  autorun_harden                      自启动面收紧（计划任务目录 + IFEO 键 ACL）
+  ps_v2_disable                       卸载 PowerShell v2 引擎（防降级攻击）
+  ensure_dirs                         环境自愈（补齐必需目录  修插件通道 WinError 267）
+  svc_remoteregistry_disable         停止并禁用：远程注册表
+  svc_spooler_disable                停止并禁用：打印后台
+  svc_usbstor_disable                停止并禁用：USB 存储驱动
+  svc_eventlog_disable               停止并禁用：事件日志服务（谨慎）
+  hosts_sample_block                 hosts：示例屏蔽条目
+  audit_enable                        开启关键审核（4688/4624/4625/4672）
+  lockout_enable                      账户锁定阈值（连错 5 次锁 15 分钟）
+  winlogon_cleanup                    Winlogon 加固（删自动登录凭据 + AutoAdminLogon=0 + CachedLogonsCount=0）
+  runtime_acl                         本体目录 ACL（SYSTEM 写 / Users 只读执行  堵自我卸载）
+  ps_user_deny                        按身份拒绝 PowerShell/mshta（只拒日常账户  不影响我们的 SYSTEM 通道）
+  applocker_ps_deny                   AppLocker：按用户组限制 PowerShell/cmd/mshta（默认只审计）
+  asr_rules                          ASR 攻击面缩减规则（10 条）
+  hosts_dns_harden                   DNS 固化 + hosts 托管块
+  integrity_baseline                 完整性基线台账（自启面/服务/驱动/任务/WMI/IFEO）
+  whitelist_snapshot                 白名单快照（应有集合锁定）
+  triple_fallback                    三重兜底（目录 + 计划任务 + WMI 事件订阅）
+  autorun_off                         停止自启（自动维护的停止键）
+  autorun_audit                       自启动面审计（计划任务/WMI订阅/IFEO/Run/COM/服务）
+  gate_test                           权限校验·自检（三种情形一次验完）
+  hosts_clear_block                  hosts：清空托管块

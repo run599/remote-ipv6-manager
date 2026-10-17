@@ -220,7 +220,7 @@ Item {
                     // （原来这里的注释写着"登录成功后会记住本次输入"，但代码里
                     //   根本没有自启动配置 —— 注释承诺了没做的事，这次真做了。）
                     input.text: api.savedServer().length > 0
-                                ? api.savedServer() : "https://192.168.1.10:8443"
+                                ? api.savedServer() : "https://127.0.0.1:8443"
                 }
                 Field {
                     id: userField

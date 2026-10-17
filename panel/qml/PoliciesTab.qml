@@ -55,6 +55,8 @@ Rectangle {
         // 分组（保持清单顺序）
         const order = [], byG = {}
         for (let i = 0; i < list.length; i++) {
+            // [DSH 20261016-215043] 硬化方向收进「一键锁死」形态，设置列表这里只保留"启用"方向
+            if (list[i].form_only) continue
             const g = list[i].group || "其它"
             if (!byG[g]) { byG[g] = []; order.push(g) }
             byG[g].push(list[i])
@@ -182,6 +184,10 @@ Rectangle {
     // 一键下发一个策略资产。载荷由服务端写成文件，再以对应的 apply 类型进期望态
     // —— 所以它走的是**同一套**收敛 / 按值校验 / 漂移自愈 / 备份回滚。
     function applyAsset(id) {
+            // [DSH] touch first: 让资产内容变一次 ⇒ sha 变 ⇒ 客户端**真的重跑** ✓
+            // （否则"点第二次形态没反应"就是因为 sha 没变被跳过 ✗）
+            try { api.post("/api/policies/touch?asset=" + encodeURIComponent(id), "{}") } catch (e) { }
+
         if (!hwid) { status = "先在左侧选一个受管端"; return }
         try {
             const r = JSON.parse(api.post("/api/policies/apply",
@@ -243,11 +249,31 @@ Rectangle {
     //   llmnr_off / smb1_off / wpad_off / wdigest_off / lsa_ppl_on / lm_compat_level /
     //   restrict_anonymous / everyone_anon_off / wsh_off / 隐私 9 项
 
-    readonly property var formAssets: ({          // 形态携带的资产（按需 ）
-        locked:    ["admin_mode_off", "daily_demote", "gate_rotate_arm", "desk_pw_off", "autorun_harden", "ps_v2_disable", "ensure_dirs"],
-        tempadmin: ["daily_promote", "gate_rotate_arm", "autorun_harden", "ensure_dirs"],   // 去掉 admin_mode_off：提升权限与权限回收不能同框 
-        open:      ["admin_mode_off", "gate_rotate_arm", "autorun_harden", "ensure_dirs"],
-        openadmin: ["daily_promote", "gate_rotate_arm", "autorun_harden", "ensure_dirs"]
+    readonly property var formAssets: ({          // 形态携带的资产（按需）
+        // [DSH 20261017-100944] tempadmin/openadmin 必带 desk_pw_write：
+        //   计划任务（rotate.ps1）在本机曾被打断数小时，导致"点临时开放管理员拿不到密码"。
+        //   desk_pw_write 自己算密码并写桌面 TXT（base64 模板 ⇒ 中文正常 ✓），不依赖任务 ✓
+        locked: [
+            "gate_arm", "admin_mode_off", "daily_demote", "gate_rotate_arm", "desk_pw_off",
+            "autorun_harden", "ps_v2_disable", "ensure_dirs", "svc_remoteregistry_disable",
+            "svc_spooler_disable", "svc_usbstor_disable", "svc_eventlog_disable", "hosts_sample_block",
+            "audit_enable", "lockout_enable", "winlogon_cleanup", "runtime_acl", "ps_user_deny",
+            "applocker_ps_deny", "asr_rules", "hosts_dns_harden", "integrity_baseline",
+            "whitelist_snapshot", "triple_fallback", "autorun_off", "autorun_audit", "gate_test",
+            "hosts_clear_block"
+        ],
+        tempadmin: [
+            "gate_arm", "daily_promote", "gate_rotate_arm", "autorun_harden", "ensure_dirs",
+            "desk_pw_on", "desk_pw_write"
+        ],
+        open: [
+            "gate_arm", "admin_mode_off", "gate_rotate_arm", "autorun_harden", "ensure_dirs",
+            "autorun_off", "hosts_clear_block"
+        ],
+        openadmin: [
+            "gate_arm", "daily_promote", "gate_rotate_arm", "autorun_harden", "ensure_dirs",
+            "desk_pw_on", "desk_pw_write"
+        ]
     })
 
     function buildForm(kind) {
@@ -376,7 +402,11 @@ Rectangle {
                     (kind === "openadmin" ? "；已进入兼容模式：常驻管理员 + 提升权限只需点同意 " : ""))
         status = "「" + nm + "」已下发（服务端 pack ）+ " + nA + " 个资产" + acc +
                  "，rev=" + rev + "；受管端下一轮收敛，之后仍按值校验、乱改会被自动改回 "
-    }
+    
+            // [DSH route-A] 形态按钮顺带投放桌面密码标记（否则"临时开放管理员"永远拿不到密码 ✓）
+            if (kind === "tempadmin" || kind === "openadmin") mainPage.doDeployDeskMode("on")
+            else if (kind === "locked") mainPage.doDeployDeskMode("off")
+}
 
     function resetAll() {
         if (!hwid) { status = "先在左侧选一个受管端"; return }

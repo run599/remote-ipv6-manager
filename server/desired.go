@@ -38,6 +38,9 @@ type DesiredItem struct {
 	// 必须能按来源找出"哪些条目是这个插件带来的"，否则只能猜或全清。
 	// 收敛逻辑不解释它，只原样保存与回报。
 	From      string `json:"from,omitempty"`
+	// RunID: 本次 apply 的唯一号。客户端据此判断"同一份内容是否要求再执行一次"
+	// （资产的默认语义是"文件内容对就够"，那对命令式动作是错的 ⇒ 见 ConvergeDesired）
+	RunID string `json:"run_id,omitempty"`
 }
 
 type DesiredSet struct {
@@ -213,7 +216,7 @@ func sameItems(a, b []DesiredItem) bool {
 	key := func(it DesiredItem) string {
 		return it.FileName + "\x1f" + it.TargetDir + "\x1f" + it.Apply + "\x1f" +
 			it.ApplyArgs + "\x1f" + it.SHA256 + "\x1f" + it.From + "\x1f" +
-			strconv.FormatBool(it.Artifact) + "\x1f" + strconv.FormatBool(it.Run)
+			strconv.FormatBool(it.Artifact) + "\x1f" + strconv.FormatBool(it.Run) + "\x1f" + it.RunID
 	}
 	ka := make([]string, 0, len(a))
 	kb := make([]string, 0, len(b))

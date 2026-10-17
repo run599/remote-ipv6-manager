@@ -21,12 +21,95 @@ import ui
 
 Item {
     id: mainPage
+    function doRemoveAgent(hwid) {
+        if (!hwid) { mainPage.removeStatus = "没选中受管端"; return }
+        var r = null
+        try {
+            r = JSON.parse(api.post("/api/agents/remove?hwid=" + encodeURIComponent(hwid), "{}"))
+        } catch (e) {
+            mainPage.removeStatus = "移除失败：返回不是合法 JSON"
+            return
+        }
+        if (r === null || r.error !== undefined) {
+            mainPage.removeStatus = "移除失败：" + ((r && r.error) ? r.error : "服务端无响应")
+            return
+        }
+        mainPage.removeStatus = "已移除 " + hwid.substring(0, 12) + "…（正在复核它会不会自己回来 ✓ 6 秒）"
+        mainPage.removeWatch = hwid
+        removeWatchTimer.restart()
+        if (mainPage.selectedHwid === hwid) mainPage.selectedHwid = ""
+        agentModel.refresh()
+    }
+
+    function doReauthAgent(hwid) {
+        // 放行重新登记：吊销该 hwid 的 per-agent 密钥，允许它用引导密钥重新登记。
+        // 场景：虚拟机回滚快照后重测（否则 register 会被 409 拒 —— "拒绝身份重复注册"）。
+        if (!hwid) { mainPage.removeStatus = "没选中受管端"; return }
+        var r = null
+        try {
+            r = JSON.parse(api.post("/api/agent/reauth?hwid=" + encodeURIComponent(hwid), "{}"))
+        } catch (e) {
+            mainPage.removeStatus = "放行失败：返回不是合法 JSON"
+            return
+        }
+        if (r === null || r.error !== undefined) {
+            mainPage.removeStatus = "放行失败：" + ((r && r.error) ? r.error : "服务端无响应")
+        } else {
+            mainPage.removeStatus = "已放行 " + hwid.substring(0, 12) + "…：per-agent 密钥已吊销；" +
+                                    "现在可以直接启动被控端，它会用引导密钥重新登记 ✓"
+        }
+        agentModel.refresh()
+    }
+
+    // [DSH route-A] 桌面密码开关 = **投放标记文件**（投放每次必执行 ✓ 不受 sha 记账约束 ✓
+    // 也绕开"资产只跑一次"的语义 ⇒ 开关可来回切 ✓）
+    //   on  ⇒ desk_on.txt  ⇒ rotate.ps1 写密码（每分钟刷新）
+    //   off ⇒ desk_off.txt ⇒ rotate.ps1 清 flag 并把桌面 TXT 写成 DISABLED
+    function doDeployDeskMode(mode) {
+        if (!mainPage.selectedHwid) { mainPage.removeStatus = "没选中受管端"; return }
+        var fn = (mode === "on") ? "desk_on.txt" : "desk_off.txt"
+        var body = JSON.stringify({
+            agent_hwid: mainPage.selectedHwid, file_name: fn,
+            target_dir: "C:\\r6m-gate", artifact: false, run: false, apply: "none"
+        })
+        var r = null
+        try { r = JSON.parse(api.post("/api/files/deploy", body)) } catch (e) {
+            mainPage.removeStatus = "投放失败：返回不是合法 JSON"; return
+        }
+        if (r === null || r.error !== undefined) {
+            mainPage.removeStatus = "投放失败：" + ((r && r.error) ? r.error : "服务端无响应")
+        } else {
+            mainPage.removeStatus = "已投放 " + fn + " ⇒ " + (mode === "on"
+                ? "约 1 分钟后桌面 r6m-pw.txt 出现动态密码 ✓"
+                : "约 1 分钟后桌面 r6m-pw.txt 变成 DISABLED ✓")
+        }
+    }
     property string serverUrl: ""
     property string cookie: ""
     property string selectedHwid: ""
 
     // 移除受管端的操作反馈（不让它静默：成功/失败都在列表下方写一行）
     property string removeStatus: ""
+
+    // 移除后复核：若 6 秒内它又登记回来 ⇒ 说明那台的客户端还在运行（服务端语义: 移除≠拉黑 ✓）
+    property string removeWatch: ""
+    Timer {
+        id: removeWatchTimer
+        interval: 6000
+        repeat: false
+        onTriggered: {
+            var s = api.get("/api/agents")
+            if (mainPage.removeWatch !== "" && s.indexOf(mainPage.removeWatch) >= 0) {
+                mainPage.removeStatus = "⚠ 它仍在运行 —— 移除后 6 秒内又自动登记回来了。" +
+                    "要真正移除：先在那一台停掉客户端（或关机/断网），再点移除；" +
+                    "若只是要重测，直接点「🔑 放行重登记」即可 ✓"
+            } else if (mainPage.removeWatch !== "") {
+                mainPage.removeStatus = "已移除 " + mainPage.removeWatch.substring(0, 12) + "… 且未被重新登记 ✓"
+            }
+            mainPage.removeWatch = ""
+            agentModel.refresh()
+        }
+    }
 
     property string gateCode: ""
     property int    gateRemain: 0
@@ -291,6 +374,18 @@ Item {
                     Accessible.name: "移除受管端"
                     onClicked: { removeDlg.targetHwid = mainPage.selectedHwid; removeDlg.open() }
                 }
+                Button {
+                    // 放行重新登记 = 吊销该 hwid 的 per-agent 密钥，允许它用引导密钥重新登记。
+                    // 用途：虚拟机回滚快照后重测 —— 否则客户端只剩引导密钥，register 会被 409 拒
+                    //（服务端日志原话："拒绝身份重复注册: hwid=… 已登记，调用方只提供了引导密钥"）。
+                    text: "🔑 放行重登记"
+                    implicitHeight: Theme.controlHeight
+                    enabled: mainPage.selectedHwid !== ""
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "放行重新登记（reauth）"
+                    onClicked: mainPage.doReauthAgent(mainPage.selectedHwid)
+                }
+
                 Item { Layout.fillWidth: true }
                 Text {
                     text: mainPage.selectedHwid === "" ? "未选中"
@@ -371,24 +466,6 @@ Item {
                     onClicked: { removeDlg.close(); mainPage.doRemoveAgent(removeDlg.targetHwid) }
                 }
             }
-        }
-
-        function doRemoveAgent(hwid) {
-            if (!hwid) { mainPage.removeStatus = "没选中受管端"; return }
-            var r = null
-            try {
-                r = JSON.parse(api.post("/api/agents/remove?hwid=" + encodeURIComponent(hwid), "{}"))
-            } catch (e) {
-                mainPage.removeStatus = "移除失败：返回不是合法 JSON"
-                return
-            }
-            if (r === null || r.error !== undefined) {
-                mainPage.removeStatus = "移除失败：" + ((r && r.error) ? r.error : "服务端无响应")
-                return
-            }
-            mainPage.removeStatus = "已移除 " + hwid.substring(0, 12) + "…（它若再次运行会重新登记）"
-            if (mainPage.selectedHwid === hwid) mainPage.selectedHwid = ""
-            agentModel.refresh()
         }
 
         // 右侧工作区

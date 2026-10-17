@@ -2768,7 +2768,7 @@ a{color:var(--acc)}
 <h1>R6M 手机控制台</h1>
 
 <div class=card id=loginCard>
-  <label>服务器</label><input id=srv placeholder="https://192.168.1.10:8443">
+  <label>服务器</label><input id=srv placeholder="https://127.0.0.1:8443">
   <label>账号</label><input id=usr value=admin autocomplete=username>
   <label>密码</label><input id=pwd type=password autocomplete=current-password>
   <div class=row><button onclick=doLogin()>登录</button></div>

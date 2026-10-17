@@ -191,7 +191,7 @@ Rectangle {
                         id: pathInput
                         Layout.fillWidth: true
                         implicitHeight: Theme.controlHeight
-                        placeholderText: "或直接粘贴文件完整路径（如 C:\Users\user\\Desktop\\a.exe），回车即投放"
+                        placeholderText: "或直接粘贴文件完整路径（如 C:\\\\Users\\user\\\\Desktop\\\\a.exe），回车即投放"
                         Accessible.name: "要投放的文件路径"
                         onAccepted: if (text.length > 0) queueTab.deployPaths([text])
                     }

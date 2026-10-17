@@ -49,6 +49,9 @@ type PolicySetting struct {
 	// Excludes 声明与哪些**设置项**互斥（如"开日志 ⇄ 关日志"）。
 	// 语义：本项处于"启用"状态时，它列出的那些项**自动取消**（从本次下发里剔除）。
 	Excludes []string `json:"excludes,omitempty"`
+	// FormOnly: this setting belongs to a form only. The panel hides it from the
+	// settings list because the hardening direction is applied by the lockdown form.
+	FormOnly bool `json:"form_only"`
 }
 
 // PolicyPack 是一组预置值的**策略包**（如"隐私加固（全开）"）。
@@ -576,6 +579,7 @@ func registerPolicyRoutes(mux *http.ServeMux, sessions *SessionManager,
 				FileName: name, TargetDir: target, Apply: a.Kind,
 				ApplyArgs: a.ApplyArgs, From: from,
 				SHA256: hex.EncodeToString(asum[:]),
+				RunID:  strconv.FormatInt(time.Now().UnixNano(), 10),
 			})
 			orderOf := map[string]int{}
 			for i := range cat.Assets {

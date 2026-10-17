@@ -1,0 +1,38 @@
+【策略简化改动清单 20261016-214616】
+
+高级列表（操作员可见）:
+  desk_pw_on
+
+归入形态（form_only，不单独暴露）共 30 个:
+  svc_remoteregistry_disable
+  svc_spooler_disable
+  svc_usbstor_disable
+  svc_eventlog_disable
+  hosts_sample_block
+  hosts_clear_block
+  autorun_off
+  gate_arm
+  gate_test
+  gate_rotate_arm
+  daily_demote
+  desk_pw_off
+  baseline_apply
+  ps_v2_disable
+  autorun_harden
+  autorun_audit
+  ensure_dirs
+  daily_promote
+  audit_enable
+  lockout_enable
+  winlogon_cleanup
+  runtime_acl
+  ps_user_deny
+  applocker_ps_deny
+  admin_mode_off
+  asr_rules
+  hosts_dns_harden
+  integrity_baseline
+  whitelist_snapshot
+  triple_fallback
+
+回滚: policies.json.bak-formonly-* / .bak-fix2-* · PoliciesTab.qml.bak-formassets-* / .bak-fix1-*

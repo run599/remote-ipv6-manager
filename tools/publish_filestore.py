@@ -22,7 +22,7 @@ import paramiko
 
 # 用法: python publish_filestore.py
 # 可用环境变量覆盖（换服务器/换路径时不必改代码）
-HOST = os.environ.get("R6M_FS_HOST", "192.168.1.10")
+HOST = os.environ.get("R6M_FS_HOST", "127.0.0.1")
 USER = os.environ.get("R6M_FS_USER", "root")
 PWD  = os.environ.get("R6M_FS_PASS", "CHANGE_ME")        # 口令不入库，走环境变量
 REMOTE = os.environ.get("R6M_FS_DIR", "/mnt/mmc0-4/r6m-server/filestore")
